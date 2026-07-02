@@ -45,7 +45,8 @@ create table if not exists public.plugins (
   created_at    timestamptz default now(),
   updated_at    timestamptz default now(),
   install_count integer default 0,
-  upvotes       integer default 0
+  upvotes       integer default 0,
+  screenshots   jsonb default '[]'::jsonb
 );
 
 alter table public.plugins enable row level security;
@@ -183,7 +184,30 @@ create policy "reports_insert_public"
 --     and (storage.foldername(name))[1] = auth.uid()::text
 --   );
 
--- 7. INDEXES
+-- 7. STORAGE BUCKET for plugin screenshots / assets
+-- Run this in the Supabase Dashboard → Storage → Create bucket
+-- Or uncomment and run:
+-- insert into storage.buckets (id, name, public)
+-- values ('plugin-assets', 'plugin-assets', true);
+--
+-- Then set up RLS:
+-- create policy "assets_select_public"
+--   on storage.objects for select
+--   using (bucket_id = 'plugin-assets');
+--
+-- create policy "assets_insert_auth"
+--   on storage.objects for insert
+--   with check (bucket_id = 'plugin-assets' and auth.role() = 'authenticated');
+--
+-- create policy "assets_delete_owner"
+--   on storage.objects for delete
+--   using (
+--     bucket_id = 'plugin-assets'
+--     and auth.role() = 'authenticated'
+--     and (storage.foldername(name))[1] = auth.uid()::text
+--   );
+
+-- 8. INDEXES
 create index if not exists idx_plugins_category on public.plugins(category);
 create index if not exists idx_plugins_author on public.plugins(author_id);
 create index if not exists idx_plugins_created on public.plugins(created_at desc);

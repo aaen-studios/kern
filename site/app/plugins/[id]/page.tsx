@@ -133,50 +133,30 @@ export default async function PluginDetailPage(
         </div>
       </header>
 
-      <MatrixDivider className="mb-10 opacity-60" />
+      {plugin.screenshots && plugin.screenshots.length > 0 && (
+        <>
+          <MatrixDivider className="mb-10 opacity-60" />
 
-      {/* gallery — screenshots or placeholder */}
-      <section className="mb-12">
-        <SectionHeading kicker="gallery" title="screenshots" />
-        {plugin.screenshots && plugin.screenshots.length > 0 ? (
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            {plugin.screenshots.map((s, i) => (
-              <div
-                key={i}
-                className="aspect-video overflow-hidden bg-bg-core ring-1 ring-grid-bounds"
-              >
-                <img
-                  src={s.url}
-                  alt={s.alt ?? `${plugin.display_name} screenshot ${i + 1}`}
-                  className="h-full w-full object-cover"
-                />
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div
-            className="grid aspect-[16/7] place-items-center bg-bg-core"
-            style={{ boxShadow: "inset 0 0 0 1px rgba(22,25,32,0.9)" }}
-          >
-            <div className="text-center">
-              <div className="mb-3 flex justify-center gap-2 opacity-80">
-                {[0, 1, 2].map((i) => (
-                  <span
-                    key={i}
-                    className="h-2 w-2 rounded-full"
-                    style={{
-                      background: ["#4cf5a0", "#f5a04c", "#4c525e"][i],
-                    }}
+          {/* gallery */}
+          <section className="mb-12">
+            <SectionHeading kicker="gallery" title="screenshots" />
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              {plugin.screenshots.map((s, i) => (
+                <div
+                  key={i}
+                  className="aspect-video overflow-hidden bg-bg-core ring-1 ring-grid-bounds"
+                >
+                  <img
+                    src={s.url}
+                    alt={s.alt ?? `${plugin.display_name} screenshot ${i + 1}`}
+                    className="h-full w-full object-cover"
                   />
-                ))}
-              </div>
-              <p className="font-mono text-[11px] lowercase text-signal-low">
-                {plugin.display_name} · preview
-              </p>
+                </div>
+              ))}
             </div>
-          </div>
-        )}
-      </section>
+          </section>
+        </>
+      )}
 
       {/* about */}
       <section className="mb-12">
