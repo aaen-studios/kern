@@ -158,6 +158,11 @@ export function RadarShader({ className = "" }: { className?: string }) {
       );
       ctx.stroke();
 
+      // dispatch sweep angle for text illumination effects
+      window.dispatchEvent(new CustomEvent("radarsweep", {
+        detail: { sweepAngle, timestamp: now },
+      }));
+
       // bright core
       ctx.fillStyle = SIGNAL;
       ctx.globalAlpha = 0.85 + 0.15 * Math.sin(t * 2);
