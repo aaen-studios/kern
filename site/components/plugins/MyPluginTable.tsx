@@ -35,7 +35,12 @@ export function MyPluginTable() {
           const res = await fetch(`/api/plugins?author=${profile.github_user}`);
           if (res.ok) {
             const data = await res.json();
-            setPlugins(data);
+            // Normalize: use slug as the public ID (consistent with mapLivePlugin)
+            const normalized = data.map((p: Record<string, unknown>) => ({
+              ...p,
+              id: p.slug as string,
+            })) as Plugin[];
+            setPlugins(normalized);
           }
         }
       } catch (err) {
@@ -103,7 +108,7 @@ export function MyPluginTable() {
                 {p.category}
               </td>
               <td className="py-3 pr-4 font-mono text-[11px] text-signal-low">
-                {p.versions.length}
+                {p.versions?.length ?? 0}
               </td>
               <td className="py-3 pr-4 font-mono text-[11px] text-signal-low">
                 {p.rating_sum}

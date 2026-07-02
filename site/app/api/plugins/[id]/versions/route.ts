@@ -20,12 +20,21 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
     }
 
-    // Verify ownership
-    const { data: plugin } = await supabase
+    // Verify ownership — resolve by slug or UUID
+    let { data: plugin } = await supabase
       .from("plugins")
-      .select("author_id, slug")
-      .eq("id", id)
+      .select("id, author_id, slug")
+      .eq("slug", id)
       .single();
+
+    if (!plugin) {
+      const { data: fallback } = await supabase
+        .from("plugins")
+        .select("id, author_id, slug")
+        .eq("id", id)
+        .single();
+      plugin = fallback ?? null;
+    }
 
     if (!plugin) {
       return NextResponse.json({ error: "Plugin not found" }, { status: 404 });
@@ -33,6 +42,8 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     if (plugin.author_id !== user.id) {
       return NextResponse.json({ error: "Not authorized" }, { status: 403 });
     }
+
+    const pluginUuid = plugin.id;
 
     const body = await request.json();
     const { version, kern_compat, storage_path, sha256, size_bytes, changelog } = body;
@@ -47,7 +58,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     const { data, error } = await supabase
       .from("plugin_versions")
       .insert({
-        plugin_id: id,
+        plugin_id: pluginUuid,
         version,
         kern_compat,
         storage_path,
@@ -66,7 +77,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     await supabase
       .from("plugins")
       .update({ updated_at: new Date().toISOString() })
-      .eq("id", id);
+      .eq("id", pluginUuid);
 
     return NextResponse.json(data, { status: 201 });
   } catch (err) {

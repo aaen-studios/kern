@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { KernWordmark } from "@/components/brand/RadarMark";
+import { SignInButton } from "@/components/auth/SignInButton";
 import { UserMenu } from "@/components/auth/UserMenu";
 import { useAuth } from "@/components/auth/AuthProvider";
 
@@ -27,11 +28,10 @@ export function StickyNav() {
 
   return (
     <header
-      className={`fixed inset-x-0 top-0 z-50 transition-colors duration-300 ${
-        scrolled
-          ? "bg-bg-core/85 backdrop-blur-sm border-b border-grid-bounds/60"
-          : "bg-transparent border-b border-transparent"
-      }`}
+      className={`fixed inset-x-0 top-0 z-50 transition-colors duration-300 ${scrolled
+        ? "bg-bg-core/85 backdrop-blur-sm border-b border-grid-bounds/60"
+        : "bg-transparent border-b border-transparent"
+        }`}
     >
       <nav className="mx-auto flex h-14 max-w-[1080px] items-center justify-between px-4 sm:px-6">
         <Link
@@ -55,7 +55,7 @@ export function StickyNav() {
               </li>
             ))}
           </ul>
-          {!loading && user && <UserMenu />}
+          {!loading && (user ? <UserMenu /> : <SignInButton />)}
           <Link
             href="/#download"
             className="inline-flex items-center bg-signal-high px-3 py-1.5 font-mono text-xs lowercase text-bg-core transition hover:brightness-110"

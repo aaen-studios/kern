@@ -35,6 +35,11 @@ export interface PluginVersion {
   created_at: number;
 }
 
+export interface Screenshot {
+  url: string;
+  alt?: string;
+}
+
 export interface Plugin {
   id: string;
   display_name: string;
@@ -44,6 +49,7 @@ export interface Plugin {
   tags: string[];
   config_schema?: ConfigField[];
   versions: PluginVersion[];
+  screenshots?: Screenshot[];
   readme_md: string;
   repo_url?: string;
   homepage_url?: string;
@@ -121,6 +127,7 @@ function mapLivePlugin(raw: Record<string, unknown>): Plugin {
     category: raw.category as Category,
     tags: (raw.tags as string[]) ?? [],
     config_schema: raw.config_schema as ConfigField[] | undefined,
+    screenshots: raw.screenshots as Screenshot[] | undefined,
     versions: versions.map(mapLiveVersion),
     readme_md: (raw.readme_md as string) ?? "",
     repo_url: (raw.repo_url as string) ?? undefined,

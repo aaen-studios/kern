@@ -33,6 +33,11 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 
+# Windows reserved DOS device names
+nul
+NUL
+NUL.*
+
 # vercel
 .vercel
 

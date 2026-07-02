@@ -11,7 +11,8 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
     const { id } = await params;
     const supabase = await createServerSupabase();
 
-    const { data: plugin, error } = await supabase
+    // Try slug first, fall back to UUID
+    let { data: plugin, error } = await supabase
       .from("plugins")
       .select(`
         *,
@@ -22,8 +23,26 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
         ),
         plugin_versions (*)
       `)
-      .eq("id", id)
+      .eq("slug", id)
       .single();
+
+    if (!plugin) {
+      const { data: fallback, error: fallbackError } = await supabase
+        .from("plugins")
+        .select(`
+          *,
+          profiles:author_id (
+            github_user,
+            github_avatar,
+            github_url
+          ),
+          plugin_versions (*)
+        `)
+        .eq("id", id)
+        .single();
+      plugin = fallback ?? null;
+      error = fallbackError;
+    }
 
     if (error || !plugin) {
       return NextResponse.json({ error: "Plugin not found" }, { status: 404 });
@@ -60,12 +79,21 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
       return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
     }
 
-    // Verify ownership
-    const { data: plugin } = await supabase
+    // Verify ownership — resolve by slug or UUID
+    let { data: plugin } = await supabase
       .from("plugins")
-      .select("author_id")
-      .eq("id", id)
+      .select("id, author_id")
+      .eq("slug", id)
       .single();
+
+    if (!plugin) {
+      const { data: fallback } = await supabase
+        .from("plugins")
+        .select("id, author_id")
+        .eq("id", id)
+        .single();
+      plugin = fallback ?? null;
+    }
 
     if (!plugin) {
       return NextResponse.json({ error: "Plugin not found" }, { status: 404 });
@@ -73,6 +101,8 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
     if (plugin.author_id !== user.id) {
       return NextResponse.json({ error: "Not authorized" }, { status: 403 });
     }
+
+    const pluginUuid = plugin.id;
 
     const body = await request.json();
     const allowedFields = [
@@ -84,6 +114,7 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
       "homepage_url",
       "readme_md",
       "config_schema",
+      "screenshots",
     ];
 
     const updates: Record<string, unknown> = {};
@@ -102,7 +133,7 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
     const { data, error } = await supabase
       .from("plugins")
       .update(updates)
-      .eq("id", id)
+      .eq("id", pluginUuid)
       .select()
       .single();
 
@@ -136,12 +167,21 @@ export async function DELETE(_request: NextRequest, { params }: RouteParams) {
       return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
     }
 
-    // Verify ownership
-    const { data: plugin } = await supabase
+    // Verify ownership — resolve by slug or UUID
+    let { data: plugin } = await supabase
       .from("plugins")
-      .select("author_id")
-      .eq("id", id)
+      .select("id, author_id")
+      .eq("slug", id)
       .single();
+
+    if (!plugin) {
+      const { data: fallback } = await supabase
+        .from("plugins")
+        .select("id, author_id")
+        .eq("id", id)
+        .single();
+      plugin = fallback ?? null;
+    }
 
     if (!plugin) {
       return NextResponse.json({ error: "Plugin not found" }, { status: 404 });
@@ -150,9 +190,11 @@ export async function DELETE(_request: NextRequest, { params }: RouteParams) {
       return NextResponse.json({ error: "Not authorized" }, { status: 403 });
     }
 
+    const pluginUuid = plugin.id;
+
     // Delete versions first, then the plugin
-    await supabase.from("plugin_versions").delete().eq("plugin_id", id);
-    const { error } = await supabase.from("plugins").delete().eq("id", id);
+    await supabase.from("plugin_versions").delete().eq("plugin_id", pluginUuid);
+    const { error } = await supabase.from("plugins").delete().eq("id", pluginUuid);
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });

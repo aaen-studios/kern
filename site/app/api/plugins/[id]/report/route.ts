@@ -22,22 +22,33 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       );
     }
 
-    // Get the plugin name for the email
-    const { data: plugin } = await supabase
+    // Resolve plugin by slug or UUID
+    let { data: plugin } = await supabase
       .from("plugins")
-      .select("display_name, slug")
-      .eq("id", id)
+      .select("id, display_name, slug")
+      .eq("slug", id)
       .single();
+
+    if (!plugin) {
+      const { data: fallback } = await supabase
+        .from("plugins")
+        .select("id, display_name, slug")
+        .eq("id", id)
+        .single();
+      plugin = fallback ?? null;
+    }
 
     if (!plugin) {
       return NextResponse.json({ error: "Plugin not found" }, { status: 404 });
     }
 
+    const pluginUuid = plugin.id;
+
     // Store the report
     const { error: insertError } = await supabase
       .from("plugin_reports")
       .insert({
-        plugin_id: id,
+        plugin_id: pluginUuid,
         reason: reason.trim(),
         reporter_ip: request.headers.get("x-forwarded-for") ?? null,
       });

@@ -25,17 +25,17 @@ export function UserMenu() {
       <button
         onClick={() => setOpen(!open)}
         onBlur={() => setTimeout(() => setOpen(false), 150)}
-        className="flex items-center gap-2 rounded-full p-0.5 ring-1 ring-grid-bounds transition hover:ring-signal-high/50"
+        className="h-6 w-6 flex items-center gap-2 rounded-full ring-1 ring-grid-bounds transition hover:ring-signal-high/50"
         aria-label={`${username} menu`}
       >
         {avatarUrl ? (
           <img
             src={avatarUrl}
             alt=""
-            className="h-6 w-6 rounded-full"
+            className="rounded-full"
           />
         ) : (
-          <div className="flex h-6 w-6 items-center justify-center rounded-full bg-bg-surface text-[10px] text-zinc-300">
+          <div className="flex items-center justify-center rounded-full bg-bg-surface text-[9px] text-zinc-300">
             {username.charAt(0).toUpperCase()}
           </div>
         )}

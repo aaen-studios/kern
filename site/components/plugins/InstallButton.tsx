@@ -10,10 +10,6 @@ import { latestVersion } from "@/lib/registry";
   click launches (or focuses) kern and begins installation. If kern isn't
   installed the click does nothing useful — so we fall back to the download
   section after a short timeout + window.blur heuristic.
-
-  In the real backend this links to the Worker redirector
-  (/api/install/:id) which records an install event then 302s to kern://.
-  Against the seed we fire the protocol directly.
 */
 export function InstallButton({
   plugin,
@@ -23,16 +19,29 @@ export function InstallButton({
   size?: "md" | "lg";
 }) {
   const [fellBack, setFellBack] = useState(false);
+  const [href, setHref] = useState("");
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    // Build the deep link URL after mount so server and client render match.
+    const ver = latestVersion(plugin);
+    const base = window.location.origin;
+    const downloadUrl = ver.download_url.startsWith("http")
+      ? ver.download_url
+      : `${base}${ver.download_url}`;
+    setHref(
+      `kern://install?url=${encodeURIComponent(downloadUrl)}&id=${plugin.id}&v=${ver.version}`,
+    );
+  }, [plugin]);
 
   useEffect(() => () => {
     if (timerRef.current) clearTimeout(timerRef.current);
   }, []);
 
-  const ver = latestVersion(plugin);
-  const href = `kern://install?url=${encodeURIComponent(ver.download_url)}&id=${plugin.id}&v=${ver.version}`;
-
   const handleClick = () => {
+    // Fire-and-forget: bump the install count on the server
+    fetch(`/api/plugins/${plugin.id}/install`, { method: "POST" }).catch(() => {});
+
     // heuristic: if the window loses focus shortly, kern likely opened.
     // otherwise, after ~1.2s, show the download fallback.
     setFellBack(false);

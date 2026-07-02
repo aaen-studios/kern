@@ -20,11 +20,33 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       );
     }
 
+    // Resolve plugin by slug or UUID
+    let { data: plugin } = await supabase
+      .from("plugins")
+      .select("id")
+      .eq("slug", id)
+      .single();
+
+    if (!plugin) {
+      const { data: fallback } = await supabase
+        .from("plugins")
+        .select("id")
+        .eq("id", id)
+        .single();
+      plugin = fallback ?? null;
+    }
+
+    if (!plugin) {
+      return NextResponse.json({ error: "Plugin not found" }, { status: 404 });
+    }
+
+    const pluginUuid = plugin.id;
+
     // Check if this voter already upvoted
     const { data: existing } = await supabase
       .from("plugin_upvotes")
       .select("id")
-      .eq("plugin_id", id)
+      .eq("plugin_id", pluginUuid)
       .eq("voter_id", voter_id)
       .single();
 
@@ -33,17 +55,17 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       await supabase.from("plugin_upvotes").delete().eq("id", existing.id);
 
       // Decrement the counter
-      const { data: plugin } = await supabase
+      const { data: pluginData } = await supabase
         .from("plugins")
         .select("upvotes")
-        .eq("id", id)
+        .eq("id", pluginUuid)
         .single();
 
-      if (plugin) {
+      if (pluginData) {
         await supabase
           .from("plugins")
-          .update({ upvotes: Math.max(0, (plugin.upvotes ?? 0) - 1) })
-          .eq("id", id);
+          .update({ upvotes: Math.max(0, (pluginData.upvotes ?? 0) - 1) })
+          .eq("id", pluginUuid);
       }
 
       return NextResponse.json({ upvoted: false });
@@ -52,7 +74,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     // New upvote
     const { error } = await supabase
       .from("plugin_upvotes")
-      .insert({ plugin_id: id, voter_id });
+      .insert({ plugin_id: pluginUuid, voter_id });
 
     if (error) {
       // Unique constraint violation means they already upvoted (race condition)
@@ -63,17 +85,17 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     }
 
     // Increment the counter
-    const { data: plugin } = await supabase
+    const { data: pluginData } = await supabase
       .from("plugins")
       .select("upvotes")
-      .eq("id", id)
+      .eq("id", pluginUuid)
       .single();
 
-    if (plugin) {
+    if (pluginData) {
       await supabase
         .from("plugins")
-        .update({ upvotes: (plugin.upvotes ?? 0) + 1 })
-        .eq("id", id);
+        .update({ upvotes: (pluginData.upvotes ?? 0) + 1 })
+        .eq("id", pluginUuid);
     }
 
     return NextResponse.json({ upvoted: true });
@@ -100,10 +122,31 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     }
 
     const supabase = await createServerSupabase();
+
+    // Resolve plugin by slug or UUID
+    let { data: plugin } = await supabase
+      .from("plugins")
+      .select("id")
+      .eq("slug", id)
+      .single();
+
+    if (!plugin) {
+      const { data: fallback } = await supabase
+        .from("plugins")
+        .select("id")
+        .eq("id", id)
+        .single();
+      plugin = fallback ?? null;
+    }
+
+    if (!plugin) {
+      return NextResponse.json({ upvoted: false });
+    }
+
     const { data } = await supabase
       .from("plugin_upvotes")
       .select("id")
-      .eq("plugin_id", id)
+      .eq("plugin_id", plugin.id)
       .eq("voter_id", voter_id)
       .single();
 

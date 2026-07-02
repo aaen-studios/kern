@@ -123,16 +123,6 @@ export default async function PluginDetailPage(
         <div className="flex shrink-0 flex-col gap-3 lg:w-64">
           <InstallButton plugin={plugin} size="lg" />
           <div className="flex flex-col gap-2">
-            {plugin.repo_url && (
-              <a
-                href={plugin.repo_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center justify-center bg-bg-surface px-4 py-2 font-mono text-xs lowercase text-zinc-300 ring-1 ring-grid-bounds transition hover:text-signal-high"
-              >
-                view source
-              </a>
-            )}
             <a
               href={v.download_url}
               className="inline-flex items-center justify-center bg-bg-surface px-4 py-2 font-mono text-xs lowercase text-zinc-300 ring-1 ring-grid-bounds transition hover:text-signal-high"
@@ -145,29 +135,47 @@ export default async function PluginDetailPage(
 
       <MatrixDivider className="mb-10 opacity-60" />
 
-      {/* gallery — css/svg mock */}
+      {/* gallery — screenshots or placeholder */}
       <section className="mb-12">
-        <div
-          className="grid aspect-[16/7] place-items-center bg-bg-core"
-          style={{ boxShadow: "inset 0 0 0 1px rgba(22,25,32,0.9)" }}
-        >
-          <div className="text-center">
-            <div className="mb-3 flex justify-center gap-2 opacity-80">
-              {[0, 1, 2].map((i) => (
-                <span
-                  key={i}
-                  className="h-2 w-2 rounded-full"
-                  style={{
-                    background: ["#4cf5a0", "#f5a04c", "#4c525e"][i],
-                  }}
+        <SectionHeading kicker="gallery" title="screenshots" />
+        {plugin.screenshots && plugin.screenshots.length > 0 ? (
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            {plugin.screenshots.map((s, i) => (
+              <div
+                key={i}
+                className="aspect-video overflow-hidden bg-bg-core ring-1 ring-grid-bounds"
+              >
+                <img
+                  src={s.url}
+                  alt={s.alt ?? `${plugin.display_name} screenshot ${i + 1}`}
+                  className="h-full w-full object-cover"
                 />
-              ))}
-            </div>
-            <p className="font-mono text-[11px] lowercase text-signal-low">
-              {plugin.display_name} · preview
-            </p>
+              </div>
+            ))}
           </div>
-        </div>
+        ) : (
+          <div
+            className="grid aspect-[16/7] place-items-center bg-bg-core"
+            style={{ boxShadow: "inset 0 0 0 1px rgba(22,25,32,0.9)" }}
+          >
+            <div className="text-center">
+              <div className="mb-3 flex justify-center gap-2 opacity-80">
+                {[0, 1, 2].map((i) => (
+                  <span
+                    key={i}
+                    className="h-2 w-2 rounded-full"
+                    style={{
+                      background: ["#4cf5a0", "#f5a04c", "#4c525e"][i],
+                    }}
+                  />
+                ))}
+              </div>
+              <p className="font-mono text-[11px] lowercase text-signal-low">
+                {plugin.display_name} · preview
+              </p>
+            </div>
+          </div>
+        )}
       </section>
 
       {/* about */}

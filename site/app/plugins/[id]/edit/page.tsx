@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { getPlugin } from "@/lib/registry";
-import { EditPluginForm } from "@/components/plugins/EditPluginForm";
+import { EditPluginPageClient } from "@/components/plugins/EditPluginPageClient";
 import { SignInGate } from "@/components/auth/SignInGate";
 import { createServerSupabase } from "@/lib/supabase-server";
 
@@ -33,9 +33,7 @@ export default async function EditPluginPage({ params }: Props) {
   let body: React.ReactNode;
 
   if (!user) {
-    body = (
-      <SignInGate message="sign in with github to edit your plugins." />
-    );
+    body = <SignInGate message="sign in with github to edit your plugins." />;
   } else {
     const { data: profile } = await supabase
       .from("profiles")
@@ -53,22 +51,9 @@ export default async function EditPluginPage({ params }: Props) {
         </div>
       );
     } else {
-      body = <EditPluginForm plugin={plugin} />;
+      body = <EditPluginPageClient plugin={plugin} />;
     }
   }
 
-  return (
-    <main className="mx-auto max-w-[1080px] px-4 pb-24 pt-28 sm:px-6">
-      <header className="mb-10">
-        <p className="font-mono text-xs lowercase text-signal-low">
-          {"// "}edit
-        </p>
-        <h1 className="mt-2 font-mono text-3xl lowercase text-zinc-100">
-          edit {plugin.display_name}
-        </h1>
-      </header>
-
-      {body}
-    </main>
-  );
+  return <>{body}</>;
 }

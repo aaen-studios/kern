@@ -18,7 +18,8 @@ export async function GET(request: NextRequest) {
           github_user,
           github_avatar,
           github_url
-        )
+        ),
+        plugin_versions (*)
       `);
 
     // Text search on display_name and description
@@ -81,6 +82,7 @@ export async function GET(request: NextRequest) {
       author_github: p.profiles?.github_user ?? null,
       author_avatar: p.profiles?.github_avatar ?? null,
       profiles: undefined,
+      versions: p.plugin_versions ?? [],
     }));
 
     return NextResponse.json(result);
