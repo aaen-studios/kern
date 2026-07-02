@@ -29,7 +29,7 @@ export default async function ChangelogPage() {
             rel="noopener noreferrer"
             className="text-signal-high underline underline-offset-2"
           >
-            ellipog/kern
+            aaen-studios/kern
           </a>
           . scroll to load more.
         </p>

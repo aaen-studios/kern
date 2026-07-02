@@ -17,6 +17,7 @@ import { MatrixDivider } from "@/components/ui/MatrixBorder";
 import { SectionHeading } from "@/components/ui/Reveal";
 import { UpvoteButton } from "@/components/plugins/UpvoteButton";
 import { ReportButton } from "@/components/plugins/ReportButton";
+import { Odometer } from "@/components/ui/Odometer";
 
 export async function generateStaticParams() {
   const ids = await getPluginIds();
@@ -193,10 +194,10 @@ export default async function PluginDetailPage(
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
           <Stat
             label="installs"
-            value={plugin.install_count.toLocaleString()}
+            value={plugin.install_count}
           />
-          <Stat label="upvotes" value={String(plugin.rating_sum)} />
-          <Stat label="versions" value={String(plugin.versions.length)} />
+          <Stat label="upvotes" value={plugin.rating_sum} />
+          <Stat label="versions" value={plugin.versions.length} />
         </div>
       </section>
 
@@ -221,13 +222,15 @@ export default async function PluginDetailPage(
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({ label, value }: { label: string; value: number }) {
   return (
     <div
       className="bg-bg-surface/40 p-4"
       style={{ boxShadow: "inset 0 0 0 1px rgba(22,25,32,0.9)" }}
     >
-      <p className="font-mono text-lg text-signal-high">{value}</p>
+      <p className="font-mono text-lg text-signal-high">
+        <Odometer value={value} />
+      </p>
       <p className="font-mono text-[11px] lowercase text-signal-low">
         {label}
       </p>

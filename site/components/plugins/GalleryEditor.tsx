@@ -3,6 +3,7 @@
 import { useState, useRef } from "react";
 import { createClient } from "@/lib/supabase";
 import type { Screenshot } from "@/lib/registry";
+import { StatusDots } from "@/components/ui/StatusDots";
 
 const MAX_SCREENSHOTS = 4;
 
@@ -129,9 +130,7 @@ export function GalleryEditor({
                 }}
               />
               {uploadingIndex === i ? (
-                <span className="font-mono text-[10px] text-signal-low">
-                  uploading…
-                </span>
+                <StatusDots status="breathe" label="uploading screenshot" count={3} />
               ) : (
                 <>
                   <span className="text-lg text-signal-low">+</span>

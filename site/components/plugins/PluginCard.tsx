@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { Plugin } from "@/lib/registry";
 import { formatRelativeTime, isOfficial, latestVersion } from "@/lib/registry";
 import { Badge, VerifiedBadge } from "@/components/ui/Badge";
+import { Odometer } from "@/components/ui/Odometer";
 
 /*
   §7.1 — a single plugin card. icon (radar glyph by category), displayName,
@@ -62,8 +63,8 @@ export function PluginCard({ plugin }: { plugin: Plugin }) {
           <span className="font-mono text-[10px] text-signal-low">v{v.version}</span>
         </div>
         <div className="flex items-center gap-3 font-mono text-[10px] text-signal-low">
-          <span>↓ {plugin.install_count.toLocaleString()}</span>
-	          <span>↑ {plugin.rating_sum}</span>
+          <span>↓ <Odometer value={plugin.install_count} /></span>
+          <span>↑ <Odometer value={plugin.rating_sum} /></span>
           <span className="hidden sm:inline">{formatRelativeTime(plugin.updated_at)}</span>
         </div>
       </div>

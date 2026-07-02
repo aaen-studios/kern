@@ -147,7 +147,6 @@ body {
     transform: rotate(360deg);
   }
 }
-
 /* gentle reveal used when reduced motion is fine */
 @keyframes fade-up {
   from {
