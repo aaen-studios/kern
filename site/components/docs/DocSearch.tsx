@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import Fuse from "fuse.js";
 import type { DocMeta } from "@/lib/docs";
 
 /*
@@ -12,14 +13,20 @@ export function DocSearch({ docs }: { docs: DocMeta[] }) {
   const [q, setQ] = useState("");
 
   const results = useMemo(() => {
-    const query = q.trim().toLowerCase();
+    const query = q.trim();
     if (!query) return null;
-    return docs.filter(
-      (d) =>
-        d.title.toLowerCase().includes(query) ||
-        d.description.toLowerCase().includes(query) ||
-        d.slug.toLowerCase().includes(query),
-    );
+
+    const fuse = new Fuse(docs, {
+      keys: [
+        { name: "title", weight: 3 },
+        { name: "description", weight: 1 },
+        { name: "slug", weight: 2 },
+      ],
+      threshold: 0.4,
+      minMatchCharLength: 2,
+      ignoreLocation: true,
+    });
+    return fuse.search(query).map((result) => result.item);
   }, [q, docs]);
 
   return (

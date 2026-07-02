@@ -5,7 +5,6 @@ import {
   getPlugin,
   getPluginIds,
   isOfficial,
-  avgRating,
   latestVersion,
   formatRelativeTime,
 } from "@/lib/registry";
@@ -45,7 +44,6 @@ export default async function PluginDetailPage(
 
   const official = isOfficial(plugin.author);
   const v = latestVersion(plugin);
-  const rating = avgRating(plugin);
 
   const jsonLd = {
     "@context": "https://schema.org",
@@ -59,11 +57,6 @@ export default async function PluginDetailPage(
       name: plugin.author_github ?? plugin.author,
     },
     softwareVersion: v.version,
-    aggregateRating: {
-      "@type": "AggregateRating",
-      ratingValue: rating.toFixed(1),
-      ratingCount: plugin.rating_count || 1,
-    },
     offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
   };
 

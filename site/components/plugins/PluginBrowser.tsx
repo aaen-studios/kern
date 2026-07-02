@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import Fuse from "fuse.js";
 import type { Plugin } from "@/lib/registry";
 import { ALL_CATEGORIES, isOfficial } from "@/lib/registry";
 import { PluginCard } from "@/components/plugins/PluginCard";
@@ -37,23 +38,30 @@ export function PluginBrowser({ all }: { all: Plugin[] }) {
 
   const filtered = useMemo(() => {
     let r = [...all];
+
+    // Fuzzy search via Fuse.js — typo-tolerant, relevance-ranked
     if (q) {
-      const query = q.toLowerCase();
-      r = r.filter(
-        (p) =>
-          p.display_name.toLowerCase().includes(query) ||
-          p.description.toLowerCase().includes(query) ||
-          p.tags.some((t) => t.toLowerCase().includes(query)),
-      );
+      const fuse = new Fuse(r, {
+        keys: [
+          { name: "display_name", weight: 3 },
+          { name: "description", weight: 1 },
+          { name: "tags", weight: 2 },
+        ],
+        threshold: 0.4,
+        minMatchCharLength: 2,
+        ignoreLocation: true,
+      });
+      r = fuse.search(q).map((result) => result.item);
     }
+
     if (category !== "all") r = r.filter((p) => p.category === category);
-	    if (verified) r = r.filter((p) => isOfficial(p.author));
-	
-	    r.sort((a, b) => {
-	      if (sort === "recent") return b.updated_at - a.updated_at;
-	      if (sort === "upvotes") return b.rating_sum - a.rating_sum;
-	      return b.install_count - a.install_count;
-	    });
+    if (verified) r = r.filter((p) => isOfficial(p.author));
+
+    r.sort((a, b) => {
+      if (sort === "recent") return b.updated_at - a.updated_at;
+      if (sort === "upvotes") return b.rating_sum - a.rating_sum;
+      return b.install_count - a.install_count;
+    });
     return r;
   }, [all, q, category, sort, verified]);
 

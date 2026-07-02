@@ -5,6 +5,7 @@ import { StickyNav } from "@/components/layout/StickyNav";
 import { Footer } from "@/components/layout/Footer";
 import { BackToTop } from "@/components/layout/BackToTop";
 import { AuthProvider } from "@/components/auth/AuthProvider";
+import { Analytics } from "@vercel/analytics/next"
 
 const jetbrainsMono = JetBrains_Mono({
   subsets: ["latin"],
@@ -90,6 +91,7 @@ export default function RootLayout({
         </AuthProvider>
         <Footer />
         <BackToTop />
+        <Analytics />
       </body>
     </html>
   );

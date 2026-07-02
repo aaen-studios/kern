@@ -224,9 +224,11 @@ export async function getPlugins(
 
 export async function getPlugin(id: string): Promise<Plugin | null> {
   if (isLive()) {
-    // For live mode we need to fetch all and find by slug, or add a slug endpoint
-    const plugins = await getPlugins();
-    return plugins.find((p) => p.id === id) ?? null;
+    const data = await fetchFromApi<Record<string, unknown>>(
+      `/api/plugins/${encodeURIComponent(id)}`,
+    );
+    if (data) return mapLivePlugin(data);
+    return null;
   }
 
   return seedPlugins.find((p) => p.id === id) ?? null;
@@ -315,7 +317,10 @@ export function isOfficial(author: string): boolean {
 }
 
 export function avgRating(p: Plugin): number {
-  return p.rating_count === 0 ? p.rating_sum : p.rating_sum / p.rating_count;
+  // No rating system exists in live mode (rating_count is 0); seed mode
+  // provides real values. Return 0 when there's no data to avoid shipping
+  // misleading fake-average values.
+  return p.rating_count === 0 ? 0 : p.rating_sum / p.rating_count;
 }
 
 export function latestVersion(p: Plugin): PluginVersion {
