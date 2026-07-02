@@ -13,7 +13,7 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://kern.app"),
+  metadataBase: new URL("https://kern.aaenz.no"),
   title: {
     default: "kern - any server. one panel.",
     template: "%s · kern",
@@ -32,7 +32,7 @@ export const metadata: Metadata = {
   authors: [{ name: "kern", url: "https://github.com/aaen-studios/kern" }],
   openGraph: {
     type: "website",
-    url: "https://kern.app",
+    url: "https://kern.aaenz.no",
     siteName: "kern",
     title: "kern - any server. one panel.",
     description:
@@ -56,7 +56,7 @@ const jsonLd = {
   description:
     "Cross-platform desktop server manager built with Tauri. Live terminal, per-process telemetry, graceful lifecycle, and a plugin system.",
   offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
-  url: "https://kern.app",
+  url: "https://kern.aaenz.no",
   downloadUrl: "https://github.com/aaen-studios/kern/releases/latest",
 };
 

@@ -68,7 +68,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       try {
         const resend = new Resend(resendApiKey);
         await resend.emails.send({
-          from: "kern registry <reports@kern.app>",
+          from: "kern registry <reports@aaenz.no>",
           to: reportEmail,
           subject: `[kern] Plugin reported: ${plugin.display_name}`,
           html: `
@@ -76,7 +76,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
             <p><strong>Plugin:</strong> ${plugin.display_name} (${plugin.slug})</p>
             <p><strong>Reason:</strong> ${reason.trim()}</p>
             <p><strong>Time:</strong> ${new Date().toISOString()}</p>
-            <p><a href="${process.env.NEXT_PUBLIC_SITE_URL ?? "https://kern.app"}/plugins/${plugin.slug}">View plugin ↗</a></p>
+            <p><a href="${process.env.NEXT_PUBLIC_SITE_URL ?? "https://kern.aaenz.no"}/plugins/${plugin.slug}">View plugin ↗</a></p>
           `,
         });
       } catch (emailErr) {

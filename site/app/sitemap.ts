@@ -2,7 +2,7 @@ import type { MetadataRoute } from "next";
 import { getAllDocs } from "@/lib/docs";
 import { getPluginIds, getPublishers } from "@/lib/registry";
 
-const BASE = "https://kern.app";
+const BASE = "https://kern.aaenz.no";
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const staticRoutes = ["", "/plugins", "/docs", "/changelog"].map((path) => ({

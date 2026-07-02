@@ -1,7 +1,7 @@
 # kern — Website & Plugin Registry Master Prompt
 
 > Paste this entire document into your AI coding agent (or hand it to a developer) to build
-> **kern.app** — the marketing site, docs hub, GitHub-Releases-backed download flow, and a
+> **kern.aaenz.no** — the marketing site, docs hub, GitHub-Releases-backed download flow, and a
 > live plugin browser/registry for the kern desktop app.
 >
 > This brief is **self-contained**: it contains every brand value, API shape, file format, and
@@ -12,7 +12,7 @@
 
 ## 0. Role & how to use this prompt
 
-You are building **kern.app**, the public website for the **kern** desktop application. Your output is a
+You are building **kern.aaenz.no**, the public website for the **kern** desktop application. Your output is a
 production-ready Next.js application plus a Cloudflare-hosted plugin registry backend.
 
 ### Build order (follow strictly)
@@ -474,7 +474,7 @@ counts reflect real browser→app handoffs.
 ### 6.5 The `kern://install` redirector
 The "Install in kern" button does **not** link straight to `kern://…`. It links to the Worker:
 ```
-https://kern.app/api/install/:id?v=:version
+https://kern.aaenz.no/api/install/:id?v=:version
 ```
 The Worker: (1) records an install event, (2) 302-redirects to
 `kern://install?url=<R2-url>&id=<id>&v=<version>`. This guarantees counting even when the protocol handler
@@ -641,7 +641,7 @@ Framer Motion reveals (skipped under reduced-motion).
 - Keyboard-navigable filter sidebar, search, and modal flows.
 
 ### 11.2 SEO
-- `metadata` / `generateMetadata` per route; `metadataBase` = `https://kern.app`.
+- `metadata` / `generateMetadata` per route; `metadataBase` = `https://kern.aaenz.no`.
 - `opengraph-image.tsx` — build-time OG image (near-black bg, radar glyph, mono font) via `next/og`.
 - **JSON-LD `SoftwareApplication`** in the root layout: `name`, `operatingSystem: "Windows, macOS, Linux"`,
   `applicationCategory: "UtilitiesApplication"`, `downloadUrl` → latest release, `offers` free.
@@ -736,7 +736,7 @@ GitHub Action (`publish.yml`) on the `kern-registry` repo: on PR, validate the `
 manifest, check id/version uniqueness); on merge to `main`, upload blob to R2 + upsert D1 row.
 
 ### 13.3 Domain
-Production: `https://kern.app`. Configure DNS for Vercel (site) and a `api.kern.app` (or path-routed
+Production: `https://kern.aaenz.no`. Configure DNS for Vercel (site) and a `api.kern.aaenz.no` (or path-routed
 `/api`) CNAME to the Worker. The `kern://` protocol is registered by the desktop app installer.
 
 ### 13.4 Security checklist

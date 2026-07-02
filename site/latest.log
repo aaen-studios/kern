@@ -10600,3 +10600,9 @@
 [16:20:14]  GET /plugins/minecraft_java/edit 200 in 2.3s (next.js: 614ms, proxy.ts: 931ms, application-code: 795ms)
 [16:20:17]  GET /sw.js 404 in 205ms (next.js: 26ms, proxy.ts: 137ms, application-code: 41ms)
 [16:20:46]  GET /sw.js 404 in 402ms (next.js: 9ms, proxy.ts: 317ms, application-code: 75ms)
+[16:23:20]  GET /?code=86557310-87f4-4529-b2d4-dae2817a0a74 200 in 1423ms (next.js: 27ms, proxy.ts: 236ms, application-code: 1160ms)
+[16:23:22]  GET /sw.js 404 in 177ms (next.js: 10ms, proxy.ts: 118ms, application-code: 50ms)
+[16:23:52]  GET /sw.js 404 in 312ms (next.js: 10ms, proxy.ts: 248ms, application-code: 55ms)
+[16:25:40] SUCCESS: The process "node.exe" with PID 59096 has been terminated.
+[16:25:40] SUCCESS: The process "node.exe" with PID 20112 has been terminated.
+[16:25:40] error: script "dev" exited with code 1

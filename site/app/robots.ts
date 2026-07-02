@@ -6,6 +6,6 @@ export default function robots(): MetadataRoute.Robots {
       userAgent: "*",
       allow: "/",
     },
-    sitemap: "https://kern.app/sitemap.xml",
+    sitemap: "https://kern.aaenz.no/sitemap.xml",
   };
 }
