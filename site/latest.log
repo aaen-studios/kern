@@ -1,0 +1,11 @@
+[13:51:04] [13:51:04] $ bun dev
+[13:51:04] $ next dev
+[13:51:04] ▲ Next.js 16.2.10 (Turbopack)
+[13:51:04] - Local:         http://localhost:3000
+[13:51:04] - Network:       http://172.20.10.2:3000
+[13:51:04] ✓ Ready in 445ms
+[13:51:07]  GET / 200 in 2.2s (next.js: 152ms, application-code: 2.0s)
+[13:51:10]  GET / 200 in 416ms (next.js: 5ms, application-code: 411ms)
+[13:51:13]  GET /sw.js 404 in 81ms (next.js: 27ms, application-code: 54ms)
+[13:51:38]  GET / 200 in 658ms (next.js: 6ms, application-code: 652ms)
+[13:51:42]  GET /sw.js 404 in 64ms (next.js: 8ms, application-code: 55ms)

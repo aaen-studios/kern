@@ -1,26 +1,176 @@
 @import "tailwindcss";
 
+/*
+  kern — "Signal Radar" design tokens.
+  Verbatim from WEBSITE_MASTER_PROMPT.md §3.2.
+  Color is strictly semantic: green = running/active/cta,
+  amber = transitional/warn, crimson = error, gray = standby.
+  Never decorative. Never invent new hues.
+*/
+@theme {
+  --color-bg-core: #050506;
+  --color-bg-surface: #0b0c10;
+  --color-grid-bounds: #161920;
+  --color-signal-high: #4cf5a0;
+  --color-signal-low: #4c525e;
+  --color-warn-vector: #f5a04c;
+  --color-fault-vector: #f54c4c;
+
+  --font-mono: var(--font-jetbrains-mono), "JetBrains Mono", "Cascadia Code",
+    "Fira Code", ui-monospace, monospace;
+}
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #050506;
+  --foreground: #d4d4d8; /* zinc-300 */
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  background: var(--background);
+  color-scheme: dark;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* kern mark / emission-core radial bloom (used behind hero, radar glyph) */
+.radial-bloom {
+  background: radial-gradient(
+    circle at center,
+    rgba(76, 245, 160, 0.18) 0%,
+    rgba(76, 245, 160, 0.06) 30%,
+    transparent 70%
+  );
+}
+
+/*
+  Dotted-matrix boundaries instead of solid lines.
+  Use as section dividers, card outlines, table separators.
+  Avoid solid 1px borders except for focus rings.
+*/
+@utility matrix-border {
+  background-image: radial-gradient(#161920 1px, transparent 1px);
+  background-size: 6px 6px;
+  background-repeat: repeat;
+  background-position: center;
+}
+
+/* A fainter dot-grid for section accent backgrounds (low opacity). */
+@utility matrix-grid-faint {
+  background-image: radial-gradient(rgba(22, 25, 32, 0.6) 1px, transparent 1px);
+  background-size: 10px 10px;
+  background-repeat: repeat;
+  background-position: center;
+}
+
+/* Thin scrollbars: 6px, grid-bounds thumb, transparent track, signal-low on hover. */
+@layer base {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #161920 transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background-color: #161920;
+    border-radius: 9999px;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: #4c525e;
+  }
+
+  /* Visible focus rings (signal-green outline). The kern desktop app resets
+     outline:none — the website must NOT. Accessibility is non-negotiable. */
+  :focus-visible {
+    outline: 2px solid var(--color-signal-high);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  ::selection {
+    background: rgba(76, 245, 160, 0.25);
+    color: #fff;
+  }
+}
+
+/* ---- status-dot keyframes (lifted verbatim from the app, §3.5) ---- */
+
+/* green — traveling wave (running) */
+@keyframes dot-wave {
+  0%,
+  100% {
+    opacity: 0.2;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+/* amber — slow breathe (starting/installing) */
+@keyframes dot-breathe {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 0.85;
+  }
+}
+/* crimson — rapid blink (error) */
+@keyframes dot-blink {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* slow rotating sweep for the radar glyph decoration */
+@keyframes radar-sweep {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* gentle reveal used when reduced motion is fine */
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/*
+  Accessibility: gate all motion on prefers-reduced-motion.
+  Pause/hide shaders + animations; static dot-grids remain.
+*/
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
 }
