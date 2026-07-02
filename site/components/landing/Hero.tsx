@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { RadarShader } from "@/components/landing/RadarShader";
 import { VersionBadge } from "@/components/download/VersionBadge";
+import { Badge } from "@/components/ui/Badge";
 import { StatusDots } from "@/components/ui/StatusDots";
 import type { Release } from "@/lib/github";
 
@@ -43,6 +44,9 @@ export function Hero({ release }: { release: Release | null }) {
           — with a live terminal, per-process telemetry, and graceful lifecycle.
           web servers, discord bots, local apis. teach it new types with
           plugins.
+          <Badge tone="signal" className="ml-1">
+            open source
+          </Badge>
         </p>
 
         <div className="mt-8 flex flex-wrap items-center gap-3">

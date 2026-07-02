@@ -1,36 +1,61 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# kern-web
 
-## Getting Started
+**kern.aaenz.no** — the public website and plugin registry for [kern](https://github.com/aaen-studios/kern), an open source cross-platform desktop server manager built with Tauri.
 
-First, run the development server:
+## overview
+
+this is a [next.js](https://nextjs.org) project (app router) serving as the marketing site, documentation hub, and plugin registry backend for the kern desktop application.
+
+- **landing page** — hero, feature mockups, download links via GitHub releases
+- **docs** — markdown-powered documentation hub
+- **plugin registry** — browse, search, submit, and manage plugins (supabase-backed)
+- **changelog** — live release feed from GitHub
+- **open source** — contributions and forks welcome
+
+## tech stack
+
+| tool | role |
+|---|---|
+| next.js 16 | react framework (app router) |
+| react 19 | ui library |
+| tailwind css v4 | styling |
+| supabase | auth + plugin registry database |
+| motion | animations |
+| resend | email notifications |
+| jetbrains mono | typography |
+
+## getting started
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+open [localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## environment
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+copy `.env.example` to `.env.local` and fill in the values:
 
-## Learn More
+- `NEXT_PUBLIC_SUPABASE_URL` + `NEXT_PUBLIC_SUPABASE_ANON_KEY` — supabase project
+- `SUPABASE_SERVICE_ROLE_KEY` — server-side supabase access
+- `RESEND_API_KEY` — email for plugin reports
 
-To learn more about Next.js, take a look at the following resources:
+## project structure
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```
+app/              — next.js app router pages and api routes
+components/       — react components (brand, layout, ui, landing, auth, download, plugins)
+content/          — markdown docs and plugin seed data
+lib/              — utilities (github, supabase, auth, markdown rendering)
+public/           — static assets
+supabase/         — database migrations
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## contributing
 
-## Deploy on Vercel
+this is an open source project. pull requests, issues, and discussions are welcome on [github](https://github.com/aaen-studios/kern).
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## license
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+the code in this repository is available under the terms of the [kern](https://github.com/aaen-studios/kern) project.

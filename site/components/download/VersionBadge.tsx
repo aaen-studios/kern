@@ -7,7 +7,7 @@ import { formatVersion } from "@/lib/github";
 */
 export function VersionBadge({ tag }: { tag?: string | null }) {
   return (
-    <span className="inline-flex items-center gap-2 bg-bg-surface px-3 py-1.5 ring-1 ring-grid-bounds">
+    <span className="inline-flex h-10 items-center gap-2 bg-bg-surface px-3 py-1.5 ring-1 ring-grid-bounds">
       <RadarMark size="sm" />
       <span className="font-mono text-xs lowercase text-signal-low">latest</span>
       <span className="font-mono text-xs text-signal-high">

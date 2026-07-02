@@ -3,6 +3,7 @@
 // Next.js 16.2 error boundary — canonical recovery prop is unstable_retry.
 // kern voice: "signal lost".
 import { useEffect } from "react";
+import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { RadarMark } from "@/components/brand/RadarMark";
 
@@ -20,6 +21,9 @@ export default function Error({
   return (
     <main className="flex min-h-[70vh] flex-col items-center justify-center px-4 text-center">
       <RadarMark size="lg" className="opacity-60" />
+      <div className="mt-4">
+        <Badge tone="signal">open source</Badge>
+      </div>
       <h1 className="mt-6 font-mono text-2xl lowercase text-zinc-100">
         signal lost
       </h1>
