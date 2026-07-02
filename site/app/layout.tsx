@@ -15,7 +15,7 @@ const jetbrainsMono = JetBrains_Mono({
 export const metadata: Metadata = {
   metadataBase: new URL("https://kern.app"),
   title: {
-    default: "kern — any server. one panel.",
+    default: "kern - any server. one panel.",
     template: "%s · kern",
   },
   description:
@@ -34,13 +34,13 @@ export const metadata: Metadata = {
     type: "website",
     url: "https://kern.app",
     siteName: "kern",
-    title: "kern — any server. one panel.",
+    title: "kern - any server. one panel.",
     description:
       "a native desktop server manager. live terminal, per-process telemetry, graceful lifecycle, and a plugin system that teaches it how to run each kind of server.",
   },
   twitter: {
     card: "summary_large_image",
-    title: "kern — any server. one panel.",
+    title: "kern - any server. one panel.",
     description:
       "a native desktop server manager with a live terminal, telemetry, and plugins.",
   },

@@ -10451,3 +10451,11 @@
 [16:10:09]  GET /api/plugins?author=ellipog 200 in 249ms (next.js: 3ms, proxy.ts: 121ms, application-code: 125ms)
 [16:10:11]  GET /plugins/minecraft_java/edit 200 in 1277ms (next.js: 869ms, proxy.ts: 121ms, application-code: 287ms)
 [16:10:52]  PUT /api/plugins/minecraft_java 500 in 3.6s (next.js: 753ms, proxy.ts: 2.0s, application-code: 841ms)
+[16:13:18] ✓ Compiled in 72ms
+[16:13:18]  GET /plugins/minecraft_java/edit 200 in 740ms (next.js: 177ms, proxy.ts: 447ms, application-code: 117ms)
+[16:13:18]  GET /plugins/minecraft_java/edit 200 in 187ms (next.js: 8ms, proxy.ts: 124ms, application-code: 54ms)
+[16:13:19]  GET /plugins/minecraft_java/edit 200 in 194ms (next.js: 6ms, proxy.ts: 121ms, application-code: 67ms)
+[16:13:19]  GET /plugins/minecraft_java/edit 200 in 213ms (next.js: 12ms, proxy.ts: 137ms, application-code: 63ms)
+[16:13:19]  GET /plugins/minecraft_java/edit 200 in 165ms (next.js: 7ms, proxy.ts: 109ms, application-code: 49ms)
+[16:13:19]  GET /plugins/minecraft_java/edit 200 in 172ms (next.js: 7ms, proxy.ts: 116ms, application-code: 49ms)
+[16:13:19]  GET /plugins/minecraft_java/edit 200 in 152ms (next.js: 6ms, proxy.ts: 102ms, application-code: 44ms)
