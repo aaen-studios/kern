@@ -10584,3 +10584,19 @@
 [16:17:28]  GET /api/plugins 200 in 2.2s (next.js: 96ms, proxy.ts: 11ms, application-code: 2.1s)
 [16:17:28]  GET /api/plugins 200 in 2.2s (next.js: 102ms, proxy.ts: 11ms, application-code: 2.1s)
 [16:17:30]  GET /api/plugins?author=ellipog 200 in 163ms (next.js: 4ms, proxy.ts: 4ms, application-code: 155ms)
+[16:20:00] SUCCESS: The process "node.exe" with PID 46052 has been terminated.
+[16:20:00] SUCCESS: The process "node.exe" with PID 53428 has been terminated.
+[16:20:00] SUCCESS: The process "node.exe" with PID 55568 has been terminated.
+[16:20:00] error: script "dev" exited with code 1
+[16:20:11] $ next dev
+[16:20:11] ▲ Next.js 16.2.10 (Turbopack)
+[16:20:11] - Local:         http://localhost:3000
+[16:20:11] - Network:       http://172.20.10.2:3000
+[16:20:11] - Environments: .env
+[16:20:11] ✓ Ready in 430ms
+[16:20:12] ⚠ The "middleware" file convention is deprecated. Please use "proxy" instead. Learn more: https://nextjs.org/docs/messages/middleware-to-proxy
+[16:20:12] 
+[16:20:14]  GET /api/plugins 200 in 280ms (next.js: 76ms, proxy.ts: 5ms, application-code: 199ms)
+[16:20:14]  GET /plugins/minecraft_java/edit 200 in 2.3s (next.js: 614ms, proxy.ts: 931ms, application-code: 795ms)
+[16:20:17]  GET /sw.js 404 in 205ms (next.js: 26ms, proxy.ts: 137ms, application-code: 41ms)
+[16:20:46]  GET /sw.js 404 in 402ms (next.js: 9ms, proxy.ts: 317ms, application-code: 75ms)
