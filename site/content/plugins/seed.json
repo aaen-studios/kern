@@ -1,11 +1,11 @@
 {
-  "_comment": "kern plugin registry seed. 2 official (kern/sample) + 8 community plugins. Shape mirrors the D1 catalog (§6.3). Swap lib/registry.ts to a live Worker fetch when the backend exists.",
+  "_comment": "kern plugin registry seed — static fallback for builds without Supabase. Only the two official plugins live here; community plugins are uploaded via the Supabase-backed site.",
   "plugins": [
     {
       "id": "minecraft_java",
       "display_name": "Minecraft Java Server",
       "description": "Run and manage Minecraft Java Edition servers. Auto-downloads the correct JAR/installer, accepts EULA, edits server.properties, manages whitelist/ops/bans, and backs up worlds.",
-      "author": "kern/sample",
+      "author": "ellipog",
       "category": "game-server",
       "tags": ["minecraft", "java", "paper", "vanilla", "fabric", "forge"],
       "config_schema": [
@@ -23,7 +23,7 @@
         { "version": "1.0.0", "kern_compat": "0.1.0", "download_url": "https://r2.kern.app/plugins/minecraft_java/1.0.0.kern", "size_bytes": 161792, "changelog": "Initial release. vanilla, paper, purpur, fabric, forge.", "created_at": 1750300000000 }
       ],
       "readme_md": "# minecraft java server\n\nthe flagship first-party plugin. teaches kern how to run minecraft java edition servers across **7 server softwares**: vanilla, paper, purpur, fabric, forge, neoforge, quilt.\n\n## what it does\n\n- **auto-downloads** the correct jar or installer for the chosen software + version.\n- accepts the **eula** (scaffolded into `eula.txt`).\n- edits `server.properties` from the config form.\n- manages **whitelist / ops / bans**.\n- **backs up and restores worlds**.\n- registers two tabs in the server detail view: **setup** and **chat**.\n\n## config\n\nthe host renders the config form from `configSchema`. pick a runtime, set the minecraft version, tune jvm args. defaults are sane — paper 1.21, 2g heap.\n\n## lifecycle\n\n`start` runs `java -jar server.jar --nogui`, with runtime-qualified overrides (e.g. `start.forge` runs the forge installer with `useShell`).\n\n> **note** `stop` sends `stop` to stdin and waits up to 15s for a clean world save before hard-kill.",
-      "repo_url": "https://github.com/ellipog/kern",
+      "repo_url": "https://github.com/aaen-studios/kern",
       "homepage_url": "https://kern.app/plugins/minecraft_java",
       "featured": true,
       "created_at": 1750300000000,
@@ -36,7 +36,7 @@
       "id": "discord_bot",
       "display_name": "Discord Bot Manager",
       "description": "Scaffold and run Discord bots across runtimes. Runtime-conditional scaffolding generates the right starter files for each language.",
-      "author": "kern/sample",
+      "author": "ellipog",
       "category": "bot",
       "tags": ["discord", "bot", "node", "bun", "deno", "rust"],
       "config_schema": [
@@ -50,7 +50,7 @@
         { "version": "1.0.0", "kern_compat": "0.1.0", "download_url": "https://r2.kern.app/plugins/discord_bot/1.0.0.kern", "size_bytes": 81920, "changelog": "Initial release.", "created_at": 1750300000000 }
       ],
       "readme_md": "# discord bot manager\n\na first-party plugin for running discord bots. supports **4 runtimes**: node.js, bun, deno, rust.\n\n## runtime-conditional scaffolding\n\nthe plugin generates the right starter files for the chosen runtime — a `package.json` for node/bun/deno and a `cargo.toml` for rust.\n\n## lifecycle\n\nruntime-qualified keys override the base start command:\n\n- `start.node` → `node index.js`\n- `start.bun` → `bun index.js`\n- `start.deno` → `deno run --allow-net index.js`\n- `start.rust` → runs the compiled binary via `useShell`\n\n## config\n\nset the runtime, the entry file, and your bot token (kept in userOverrides, never shipped in the manifest).",
-      "repo_url": "https://github.com/ellipog/kern",
+      "repo_url": "https://github.com/aaen-studios/kern",
       "homepage_url": "https://kern.app/plugins/discord_bot",
       "featured": true,
       "created_at": 1750300000000,
@@ -58,202 +58,6 @@
       "install_count": 3120,
       "rating_sum": 108,
       "rating_count": 24
-    },
-    {
-      "id": "terraria_server",
-      "display_name": "Terraria Server (tShock)",
-      "description": "Run a dedicated Terraria server via tShock. Auto-fetches the build, manages config and world files.",
-      "author": "redstonewolf",
-      "category": "game-server",
-      "tags": ["terraria", "tshock", "dedicated"],
-      "config_schema": [
-        { "key": "build", "label": "tShock Build", "type": "text", "default": "latest" },
-        { "key": "maxplayers", "label": "Max Players", "type": "text", "default": "16" },
-        { "key": "world", "label": "World Name", "type": "text", "default": "world1" }
-      ],
-      "versions": [
-        { "version": "0.4.1", "download_url": "https://r2.kern.app/plugins/terraria_server/0.4.1.kern", "size_bytes": 73728, "changelog": "World autosave hook on graceful stop.", "created_at": 1751200000000 },
-        { "version": "0.4.0", "download_url": "https://r2.kern.app/plugins/terraria_server/0.4.0.kern", "size_bytes": 69632, "changelog": "Initial release.", "created_at": 1750600000000 }
-      ],
-      "readme_md": "# terraria server (tshock)\n\nrun a dedicated terraria server via tShock. the plugin fetches the build, manages `serverconfig.txt`, and stops cleanly so the world saves.\n\n## config\n\nset the tshock build, max players, and world name. the plugin scaffolds a fresh world on first start if none exists.",
-      "repo_url": "https://github.com/redstonewolf/kern-terraria",
-      "featured": false,
-      "created_at": 1750600000000,
-      "updated_at": 1751200000000,
-      "install_count": 982,
-      "rating_sum": 33,
-      "rating_count": 9
-    },
-    {
-      "id": "factorio_headless",
-      "display_name": "Factorio Headless",
-      "description": "Run a headless Factorio server. Manages saves, mods, and autosave slots with graceful lifecycle.",
-      "author": "smeltingpro",
-      "category": "game-server",
-      "tags": ["factorio", "headless", "automation"],
-      "config_schema": [
-        { "key": "version", "label": "Factorio Version", "type": "text", "default": "stable" },
-        { "key": "save", "label": "Save Slot", "type": "text", "default": "default" },
-        { "key": "mods", "label": "Mods", "type": "text", "default": "" }
-      ],
-      "versions": [
-        { "version": "0.3.0", "download_url": "https://r2.kern.app/plugins/factorio_headless/0.3.0.kern", "size_bytes": 61440, "changelog": "Mod list sync on install.", "created_at": 1751100000000 },
-        { "version": "0.2.0", "download_url": "https://r2.kern.app/plugins/factorio_headless/0.2.0.kern", "size_bytes": 57344, "changelog": "Initial release.", "created_at": 1750500000000 }
-      ],
-      "readme_md": "# factorio headless\n\nrun a headless factorio server. the plugin manages save slots, mod lists, and ensures the world is flushed before teardown — factorio saves can be large, so the 15s graceful window matters.",
-      "repo_url": "https://github.com/smeltingpro/kern-factorio",
-      "featured": false,
-      "created_at": 1750500000000,
-      "updated_at": 1751100000000,
-      "install_count": 640,
-      "rating_sum": 21,
-      "rating_count": 6
-    },
-    {
-      "id": "telegram_bot",
-      "display_name": "Telegram Bot",
-      "description": "Long-poll or webhook Telegram bots in Node/Bun. Handles token secrets and restart-on-crash.",
-      "author": "nikolai_dev",
-      "category": "bot",
-      "tags": ["telegram", "bot", "node", "bun"],
-      "config_schema": [
-        { "key": "runtime", "label": "Runtime", "type": "select", "options": ["node", "bun"], "default": "node" },
-        { "key": "token", "label": "Bot Token", "type": "text", "default": "" },
-        { "key": "mode", "label": "Mode", "type": "select", "options": ["long-poll", "webhook"], "default": "long-poll" }
-      ],
-      "versions": [
-        { "version": "0.5.2", "download_url": "https://r2.kern.app/plugins/telegram_bot/0.5.2.kern", "size_bytes": 45056, "changelog": "Webhook mode support.", "created_at": 1751000000000 },
-        { "version": "0.5.0", "download_url": "https://r2.kern.app/plugins/telegram_bot/0.5.0.kern", "size_bytes": 40960, "changelog": "Initial release.", "created_at": 1750400000000 }
-      ],
-      "readme_md": "# telegram bot\n\nrun telegram bots in node or bun. supports long-poll and webhook modes. the bot token is stored in userOverrides — never committed.",
-      "repo_url": "https://github.com/nikolai-dev/kern-telegram",
-      "featured": false,
-      "created_at": 1750400000000,
-      "updated_at": 1751000000000,
-      "install_count": 410,
-      "rating_sum": 12,
-      "rating_count": 4
-    },
-    {
-      "id": "nginx_static",
-      "display_name": "nginx Static Host",
-      "description": "Serve a static site folder over nginx. Great for local dev previews and small self-hosted pages.",
-      "author": "webworker42",
-      "category": "web",
-      "tags": ["nginx", "static", "web", "dev"],
-      "config_schema": [
-        { "key": "port", "label": "Port", "type": "text", "default": "8080" },
-        { "key": "root", "label": "Root Dir", "type": "text", "default": "public" }
-      ],
-      "versions": [
-        { "version": "0.2.0", "download_url": "https://r2.kern.app/plugins/nginx_static/0.2.0.kern", "size_bytes": 38912, "changelog": "Configurable root + port.", "created_at": 1750900000000 },
-        { "version": "0.1.0", "download_url": "https://r2.kern.app/plugins/nginx_static/0.1.0.kern", "size_bytes": 34816, "changelog": "Initial release.", "created_at": 1750300000000 }
-      ],
-      "readme_md": "# nginx static host\n\nserve a static site folder over nginx. set the port and root dir. handy for local dev previews and small self-hosted pages without spinning up a full reverse-proxy config.",
-      "repo_url": "https://github.com/webworker42/kern-nginx",
-      "featured": false,
-      "created_at": 1750300000000,
-      "updated_at": 1750900000000,
-      "install_count": 287,
-      "rating_sum": 9,
-      "rating_count": 3
-    },
-    {
-      "id": "postgres_local",
-      "display_name": "Postgres Local",
-      "description": "Spin up an ephemeral local PostgreSQL instance with a data dir, init scripts, and graceful checkpoint-on-stop.",
-      "author": "datafox",
-      "category": "database",
-      "tags": ["postgres", "database", "sql"],
-      "config_schema": [
-        { "key": "pg_version", "label": "Postgres Version", "type": "text", "default": "16" },
-        { "key": "port", "label": "Port", "type": "text", "default": "5432" },
-        { "key": "db", "label": "Database", "type": "text", "default": "app" }
-      ],
-      "versions": [
-        { "version": "0.4.0", "download_url": "https://r2.kern.app/plugins/postgres_local/0.4.0.kern", "size_bytes": 53248, "changelog": "Init script support.", "created_at": 1750800000000 },
-        { "version": "0.3.0", "download_url": "https://r2.kern.app/plugins/postgres_local/0.3.0.kern", "size_bytes": 49152, "changelog": "Initial release.", "created_at": 1750200000000 }
-      ],
-      "readme_md": "# postgres local\n\nspin up an ephemeral local postgresql instance. data lives in the instance dir, so it persists across restarts but is fully portable — copy the folder, copy the db.\n\n## graceful stop\n\non `stop`, the plugin runs a checkpoint before teardown so no transactions are lost.",
-      "repo_url": "https://github.com/datafox/kern-postgres",
-      "featured": false,
-      "created_at": 1750200000000,
-      "updated_at": 1750800000000,
-      "install_count": 512,
-      "rating_sum": 18,
-      "rating_count": 5
-    },
-    {
-      "id": "redis_local",
-      "display_name": "Redis Local",
-      "description": "Run a local Redis instance with AOF persistence and config-driven maxmemory policies.",
-      "author": "datafox",
-      "category": "database",
-      "tags": ["redis", "database", "cache"],
-      "config_schema": [
-        { "key": "port", "label": "Port", "type": "text", "default": "6379" },
-        { "key": "maxmemory", "label": "Max Memory", "type": "text", "default": "256mb" }
-      ],
-      "versions": [
-        { "version": "0.2.1", "download_url": "https://r2.kern.app/plugins/redis_local/0.2.1.kern", "size_bytes": 28672, "changelog": "AOF persistence toggle.", "created_at": 1750700000000 },
-        { "version": "0.2.0", "download_url": "https://r2.kern.app/plugins/redis_local/0.2.0.kern", "size_bytes": 24576, "changelog": "Initial release.", "created_at": 1750100000000 }
-      ],
-      "readme_md": "# redis local\n\nrun a local redis instance with aof persistence. set the port and maxmemory policy from the config form. pairs well with `postgres_local` for full local stacks.",
-      "repo_url": "https://github.com/datafox/kern-redis",
-      "featured": false,
-      "created_at": 1750100000000,
-      "updated_at": 1750700000000,
-      "install_count": 388,
-      "rating_sum": 11,
-      "rating_count": 3
-    },
-    {
-      "id": "vite_dev",
-      "display_name": "Vite Dev Server",
-      "description": "Boot a Vite dev server for any front-end project. HMR over the live terminal, restart on config change.",
-      "author": "webworker42",
-      "category": "dev-tool",
-      "tags": ["vite", "dev", "frontend", "hmr"],
-      "config_schema": [
-        { "key": "port", "label": "Port", "type": "text", "default": "5173" },
-        { "key": "framework", "label": "Framework", "type": "select", "options": ["vanilla", "react", "vue", "svelte", "solid"], "default": "react" }
-      ],
-      "versions": [
-        { "version": "0.3.0", "download_url": "https://r2.kern.app/plugins/vite_dev/0.3.0.kern", "size_bytes": 43008, "changelog": "Framework presets.", "created_at": 1750600000000 },
-        { "version": "0.2.0", "download_url": "https://r2.kern.app/plugins/vite_dev/0.2.0.kern", "size_bytes": 36864, "changelog": "Initial release.", "created_at": 1750000000000 }
-      ],
-      "readme_md": "# vite dev server\n\nboot a vite dev server for any front-end project. hmr output streams to the live terminal, and `restart` reloads the vite config without losing your editor tabs.",
-      "repo_url": "https://github.com/webworker42/kern-vite",
-      "featured": false,
-      "created_at": 1750000000000,
-      "updated_at": 1750600000000,
-      "install_count": 731,
-      "rating_sum": 24,
-      "rating_count": 7
-    },
-    {
-      "id": "grafana_local",
-      "display_name": "Grafana Local",
-      "description": "Self-host Grafana for local dashboards. Provisions datasources from the config form.",
-      "author": "metrics_io",
-      "category": "dev-tool",
-      "tags": ["grafana", "metrics", "dashboards", "monitoring"],
-      "config_schema": [
-        { "key": "port", "label": "Port", "type": "text", "default": "3000" },
-        { "key": "admin_password", "label": "Admin Password", "type": "text", "default": "admin" }
-      ],
-      "versions": [
-        { "version": "0.1.1", "download_url": "https://r2.kern.app/plugins/grafana_local/0.1.1.kern", "size_bytes": 34816, "changelog": "Datasource provisioning.", "created_at": 1750500000000 },
-        { "version": "0.1.0", "download_url": "https://r2.kern.app/plugins/grafana_local/0.1.0.kern", "size_bytes": 30720, "changelog": "Initial release.", "created_at": 1749900000000 }
-      ],
-      "readme_md": "# grafana local\n\nself-host grafana for local dashboards. the plugin provisions datasources from the config form so a fresh instance is ready to query on first start.",
-      "repo_url": "https://github.com/metrics-io/kern-grafana",
-      "featured": false,
-      "created_at": 1749900000000,
-      "updated_at": 1750500000000,
-      "install_count": 156,
-      "rating_sum": 6,
-      "rating_count": 2
     }
   ]
 }

@@ -4,7 +4,7 @@ import { getPluginIds, getPublishers } from "@/lib/registry";
 
 const BASE = "https://kern.app";
 
-export default function sitemap(): MetadataRoute.Sitemap {
+export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const staticRoutes = ["", "/plugins", "/docs", "/changelog"].map((path) => ({
     url: `${BASE}${path}`,
     lastModified: new Date(),
@@ -19,14 +19,19 @@ export default function sitemap(): MetadataRoute.Sitemap {
     priority: 0.6,
   }));
 
-  const pluginRoutes = getPluginIds().map((id) => ({
+  const [pluginIds, publishers] = await Promise.all([
+    getPluginIds(),
+    getPublishers(),
+  ]);
+
+  const pluginRoutes = pluginIds.map((id) => ({
     url: `${BASE}/plugins/${id}`,
     lastModified: new Date(),
     changeFrequency: "weekly" as const,
     priority: 0.7,
   }));
 
-  const publisherRoutes = getPublishers().map((p) => ({
+  const publisherRoutes = publishers.map((p) => ({
     url: `${BASE}/plugins/publishers/${encodeURIComponent(p.author)}`,
     lastModified: new Date(),
     changeFrequency: "monthly" as const,

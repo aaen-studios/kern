@@ -6,26 +6,24 @@ import { SectionHeading, Reveal } from "@/components/ui/Reveal";
 */
 
 const TREE: Array<{ name: string; depth: number; kind: "dir" | "file" | "active" }> = [
-  { name: "minecraft_java", depth: 0, kind: "dir" },
-  { name: "paper-1.21.jar", depth: 1, kind: "file" },
-  { name: "server.properties", depth: 1, kind: "active" },
-  { name: "eula.txt", depth: 1, kind: "file" },
-  { name: "world", depth: 1, kind: "dir" },
-  { name: "level.dat", depth: 2, kind: "file" },
-  { name: "ops.json", depth: 1, kind: "file" },
+  { name: "web_api", depth: 0, kind: "dir" },
+  { name: "app.js", depth: 1, kind: "file" },
+  { name: ".env", depth: 1, kind: "active" },
+  { name: "package.json", depth: 1, kind: "file" },
+  { name: "src", depth: 1, kind: "dir" },
+  { name: "routes", depth: 2, kind: "dir" },
+  { name: "nodemon.json", depth: 1, kind: "file" },
 ];
 
-const SAMPLE = `#Minecraft server properties
-server-port=25565
-max-players=20
-motd=kern-managed instance
-level-name=world
-enable-command-block=true
-view-distance=10`;
+const SAMPLE = `# server config
+PORT=3000
+NODE_ENV=production
+LOG_LEVEL=info
+CORS_ORIGIN=https://myapp.com`;
 
 export function FileEditorMock() {
   return (
-    <section className="border-y border-grid-bounds/40 bg-bg-surface/30">
+    <section>
       <div className="mx-auto max-w-[1080px] px-4 py-24 sm:px-6">
         <Reveal>
           <SectionHeading kicker="file editor" title="edit in place. safe paths.">

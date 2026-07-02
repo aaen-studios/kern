@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { Plugin } from "@/lib/registry";
-import { ALL_CATEGORIES } from "@/lib/registry";
+import { ALL_CATEGORIES, isOfficial } from "@/lib/registry";
 import { PluginCard } from "@/components/plugins/PluginCard";
 import { StatusDots } from "@/components/ui/StatusDots";
 
@@ -12,9 +12,9 @@ import { StatusDots } from "@/components/ui/StatusDots";
   params for shareability. Wrapped in <Suspense> by the page (useSearchParams
   requires it in v16 for statically-prerendered routes).
 */
-type Sort = "popular" | "recent" | "rating";
-
-const SORTS: Sort[] = ["popular", "recent", "rating"];
+	type Sort = "popular" | "recent" | "upvotes";
+	
+	const SORTS: Sort[] = ["popular", "recent", "upvotes"];
 
 export function PluginBrowser({ all }: { all: Plugin[] }) {
   const router = useRouter();
@@ -47,17 +47,13 @@ export function PluginBrowser({ all }: { all: Plugin[] }) {
       );
     }
     if (category !== "all") r = r.filter((p) => p.category === category);
-    if (verified) r = r.filter((p) => p.author.startsWith("kern/"));
-
-    r.sort((a, b) => {
-      if (sort === "recent") return b.updated_at - a.updated_at;
-      if (sort === "rating") {
-        const ar = a.rating_count ? a.rating_sum / a.rating_count : 0;
-        const br = b.rating_count ? b.rating_sum / b.rating_count : 0;
-        return br - ar;
-      }
-      return b.install_count - a.install_count;
-    });
+	    if (verified) r = r.filter((p) => isOfficial(p.author));
+	
+	    r.sort((a, b) => {
+	      if (sort === "recent") return b.updated_at - a.updated_at;
+	      if (sort === "upvotes") return b.rating_sum - a.rating_sum;
+	      return b.install_count - a.install_count;
+	    });
     return r;
   }, [all, q, category, sort, verified]);
 

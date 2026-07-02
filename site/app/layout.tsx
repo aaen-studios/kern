@@ -4,6 +4,7 @@ import "./globals.css";
 import { StickyNav } from "@/components/layout/StickyNav";
 import { Footer } from "@/components/layout/Footer";
 import { BackToTop } from "@/components/layout/BackToTop";
+import { AuthProvider } from "@/components/auth/AuthProvider";
 
 const jetbrainsMono = JetBrains_Mono({
   subsets: ["latin"],
@@ -23,14 +24,12 @@ export const metadata: Metadata = {
   keywords: [
     "kern",
     "server manager",
-    "minecraft server",
-    "game server panel",
     "self-hosted",
     "tauri",
     "desktop server panel",
     "plugin system",
   ],
-  authors: [{ name: "kern", url: "https://github.com/ellipog/kern" }],
+  authors: [{ name: "kern", url: "https://github.com/aaen-studios/kern" }],
   openGraph: {
     type: "website",
     url: "https://kern.app",
@@ -58,7 +57,7 @@ const jsonLd = {
     "Cross-platform desktop server manager built with Tauri. Live terminal, per-process telemetry, graceful lifecycle, and a plugin system.",
   offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
   url: "https://kern.app",
-  downloadUrl: "https://github.com/ellipog/kern/releases/latest",
+  downloadUrl: "https://github.com/aaen-studios/kern/releases/latest",
 };
 
 export default function RootLayout({
@@ -83,10 +82,12 @@ export default function RootLayout({
             __html: JSON.stringify(jsonLd).replace(/</g, "\\u003c"),
           }}
         />
-        <StickyNav />
-        <div id="main" className="flex-1">
-          {children}
-        </div>
+        <AuthProvider>
+          <StickyNav />
+          <div id="main" className="flex-1">
+            {children}
+          </div>
+        </AuthProvider>
         <Footer />
         <BackToTop />
       </body>

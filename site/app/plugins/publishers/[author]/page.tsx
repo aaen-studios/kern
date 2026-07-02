@@ -1,13 +1,18 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getPluginsByAuthor, getPublishers, isOfficial } from "@/lib/registry";
+import {
+  getPluginsByAuthor,
+  getAuthors,
+  isOfficial,
+} from "@/lib/registry";
 import { PluginCard } from "@/components/plugins/PluginCard";
 import { VerifiedBadge } from "@/components/ui/Badge";
 import { MatrixDivider } from "@/components/ui/MatrixBorder";
 
-export function generateStaticParams() {
-  return getPublishers().map((p) => ({ author: p.author }));
+export async function generateStaticParams() {
+  const authors = await getAuthors();
+  return authors.map((author) => ({ author }));
 }
 
 export async function generateMetadata(
@@ -26,10 +31,13 @@ export default async function PublisherPage(
 ) {
   const { author } = await props.params;
   const decoded = decodeURIComponent(author);
-  const plugins = getPluginsByAuthor(decoded);
+  const plugins = await getPluginsByAuthor(decoded);
   if (plugins.length === 0) notFound();
 
   const official = isOfficial(decoded);
+
+  // Grab avatar from the first plugin that has one
+  const avatar = plugins.find((p) => p.author_avatar)?.author_avatar;
 
   return (
     <main className="mx-auto max-w-[1080px] px-4 pb-24 pt-28 sm:px-6">
@@ -42,9 +50,20 @@ export default async function PublisherPage(
       </nav>
 
       <header className="mb-10">
-        <div className="flex items-center gap-2">
-          <h1 className="font-mono text-3xl lowercase text-zinc-100">{decoded}</h1>
-          {official && <VerifiedBadge />}
+        <div className="flex items-center gap-3">
+          {avatar && (
+            <img
+              src={avatar}
+              alt=""
+              className="h-8 w-8 rounded-full ring-1 ring-grid-bounds"
+            />
+          )}
+          <div className="flex items-center gap-2">
+            <h1 className="font-mono text-3xl lowercase text-zinc-100">
+              {decoded}
+            </h1>
+            {official && <VerifiedBadge />}
+          </div>
         </div>
         <p className="mt-2 font-mono text-xs text-signal-low">
           {official ? "official kern publisher" : "community publisher"} ·{" "}

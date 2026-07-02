@@ -44,7 +44,7 @@ export default async function DocPage(props: PageProps<"/docs/[[...slug]]">) {
   const prev = idx > 0 ? docs[idx - 1] : null;
   const next = idx >= 0 && idx < docs.length - 1 ? docs[idx + 1] : null;
 
-  const editUrl = `https://github.com/ellipog/kern-web/edit/main/content/docs/${doc.slug}.md`;
+  const editUrl = `https://github.com/aaen-studios/kern-web/edit/main/content/docs/${doc.slug}.md`;
 
   return (
     <article>

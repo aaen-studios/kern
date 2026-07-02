@@ -16,32 +16,30 @@ the manifest declares metadata, a dynamic config form, lifecycle commands, start
 
 ```jsonc
 {
-  "id": "minecraft_java",
-  "displayName": "Minecraft Java Server",
-  "version": "1.2.0",
-  "author": "kern/sample",
-  "description": "Run and manage Minecraft Java Edition servers…",
+  "id": "web_api",
+  "displayName": "Web API Server",
+  "version": "1.0.0",
+  "author": "kern/official",
+  "description": "Run a Node.js/Express web API with env-based config, health checks, and pm2 or nodemon for hot reload.",
   "uiEntry": "dist/index.js",
 
   "configSchema": [
-    { "key": "runtime", "label": "Server Software", "type": "select",
-      "options": ["vanilla","paper","purpur","fabric","forge","neoforge","quilt"], "default": "purpur" },
-    { "key": "mc_version", "label": "Minecraft Version", "type": "text", "default": "1.21" },
-    { "key": "jvm_args",   "label": "JVM Arguments", "type": "text", "default": "-Xms2G -Xmx2G" }
+    { "key": "port", "label": "Port", "type": "text", "default": "3000" },
+    { "key": "log_level", "label": "Log Level", "type": "select",
+      "options": ["debug","info","warn","error"], "default": "info" }
   ],
 
   "lifecycle": {
-    "start":        { "command": "{{userOverrides.java_path}}",
-                      "args": ["{{userOverrides.jvm_args}}", "-jar", "{{userOverrides.server_jar}}", "--nogui"] },
-    "start.forge":  { "command": "{{userOverrides.server_jar}}", "args": ["nogui"], "useShell": true }
+    "start": { "command": "node", "args": ["{{userOverrides.entry}}"] },
+    "start.nodemon": { "command": "nodemon", "args": ["{{userOverrides.entry}}"], "useShell": true }
   },
 
   "scaffold": {
-    "eula":   { "path": "eula.txt",   "content": "eula={{userOverrides.accept_eula}}\n" },
-    "readme": { "path": "README.txt", "content": "Minecraft Server ({{userOverrides.mc_version}})…" }
+    "env": { "path": ".env", "content": "PORT={{userOverrides.port}}\nLOG_LEVEL={{userOverrides.log_level}}\n" },
+    "readme": { "path": "README.md", "content": "Web API ({{userOverrides.port}})…" }
   },
 
-  "tabs": [ { "id": "mc-setup", "label": "Setup" }, { "id": "mc-chat", "label": "Chat" } ]
+  "tabs": [ { "id": "setup", "label": "Setup" }, { "id": "logs", "label": "Logs" } ]
 }
 ```
 
@@ -60,4 +58,4 @@ the manifest declares metadata, a dynamic config form, lifecycle commands, start
 | `scaffold` | object | no | starter files written into a fresh instance (see `scaffold`). |
 | `tabs` | tab[] | no | declarative tabs the plugin registers in the detail view. |
 
-> **warn** `id` must be lowercase with underscores only. `minecraft_java` is valid; `Minecraft-Java` is not.
+> **warn** `id` must be lowercase with underscores only. `web_api` is valid; `Web-API` is not.

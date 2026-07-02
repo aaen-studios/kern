@@ -11,10 +11,9 @@ export const metadata: Metadata = {
 };
 
 // §7.1 — listing. Server reads the full catalog; the client PluginBrowser
-// manages filter/sort/search state and URL-syncs. Wrapped in Suspense because
-// useSearchParams requires it on statically-prerendered routes in v16.
-export default function PluginsPage() {
-  const all = getPlugins();
+// manages filter/sort/search state and URL-syncs.
+export default async function PluginsPage() {
+  const all = await getPlugins();
 
   return (
     <main className="mx-auto max-w-[1080px] px-4 pb-24 pt-28 sm:px-6">
@@ -28,18 +27,16 @@ export default function PluginsPage() {
         </p>
       </header>
 
-      {/* submit affordance — phase a links to the registry repo */}
+      {/* submit affordance */}
       <div className="mb-8 flex items-center justify-between border-y border-grid-bounds/40 py-3">
         <div className="flex items-center gap-2">
           <StatusDots status="wave" label="registry live" count={3} />
           <span className="font-mono text-[11px] lowercase text-signal-low">
-            curated — phase a
+            community registry
           </span>
         </div>
         <a
-          href="https://github.com/ellipog/kern-registry"
-          target="_blank"
-          rel="noopener noreferrer"
+          href="/plugins/submit"
           className="font-mono text-[11px] lowercase text-signal-high transition hover:brightness-125"
         >
           submit a plugin ↗

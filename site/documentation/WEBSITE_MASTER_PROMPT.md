@@ -291,7 +291,7 @@ function getPlatforms(release: Release) {
 ### 4.3 Download card UI
 Each card: OS label, the matched asset's filename, file size (`(bytes/1024/1024).toFixed(1) + " MB"`), a primary
 `download` button linking to `asset.browser_download_url` (signal-green), and the OS that has no asset shows
-"Not available yet" (signal-low) with a secondary link to `https://github.com/ellipog/kern/releases/latest`.
+"Not available yet" (signal-low) with a secondary link to `https://github.com/aaen-studios/kern/releases/latest`.
 Show the latest **version badge** (`v{tag_name}`) above the cards.
 
 ### 4.4 Signed-update awareness (do not re-implement, just reference)
@@ -301,7 +301,7 @@ channel — just mention "auto-updates itself" as a feature on the landing page.
 
 ### 4.5 Fallback when release is null
 If `getRelease()` returns null (API down at build time), render the download section with a single link to
-`https://github.com/ellipog/kern/releases/latest`. **Never crash the page.**
+`https://github.com/aaen-studios/kern/releases/latest`. **Never crash the page.**
 
 ---
 

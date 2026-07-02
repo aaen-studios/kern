@@ -25,4 +25,4 @@ think of it as a self-hosted alternative to cloud game-panel tools (pterodactyl,
 - **lifecycle** — `start` / `stop` / `restart` / `install`, declared per-plugin and resolved at launch by rust.
 - **host api** — the bridge plugins use to talk to tauri commands, events, and the ui shell.
 
-> **note** these docs are the source of truth for plugin developers. the app itself ships with two sample plugins — `minecraft_java` and `discord_bot` — that exercise nearly every feature.
+> **note** these docs are the source of truth for plugin developers. the app itself ships with two sample plugins — a game server plugin and a bot runner — that exercise nearly every feature.

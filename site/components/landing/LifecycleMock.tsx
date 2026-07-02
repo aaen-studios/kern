@@ -4,8 +4,8 @@ import { StatusDots } from "@/components/ui/StatusDots";
 /*
   §10.6 — Lifecycle. Start / Stop / Restart / Install, driven by each plugin's
   lifecycle manifest block. Graceful shutdown with a 15-second timeout before
-  hard-kill — deliberately tuned so minecraft world saves complete
-  (chunk flush + level.dat) before teardown.
+  hard-kill — deliberately tuned so in-flight requests finish
+  (active connections drain) before teardown.
 */
 
 function LifeButton({
@@ -34,7 +34,7 @@ function LifeButton({
 
 export function LifecycleMock() {
   return (
-    <section className="mx-auto max-w-[1080px] px-4 py-24 sm:px-6">
+    <section className="border-y border-grid-bounds/40 bg-bg-surface/30 mx-auto max-w-[1080px] px-4 py-24 sm:px-6">
       <Reveal>
         <SectionHeading kicker="lifecycle" title="start. stop. restart. gracefully.">
           driven by each plugin&rsquo;s lifecycle manifest. commands support{" "}
@@ -75,8 +75,8 @@ export function LifecycleMock() {
               15-second timeout before hard-kill.
             </p>
             <p className="mt-2 font-mono text-xs text-signal-low">
-              deliberately tuned so minecraft world saves complete — chunk flush
-              and level.dat — before teardown. no silent drops.
+              deliberately tuned so in-flight requests finish — active
+              connections drain before teardown. no silent drops.
             </p>
           </div>
         </div>

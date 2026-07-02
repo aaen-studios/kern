@@ -20,7 +20,7 @@ if a folder is moved or deleted, the instance is flagged **orphaned** rather tha
 
 ## 3. install a plugin
 
-the app is intentionally generic. **plugins teach it how to run each type of server.** install the `minecraft_java` plugin to run a minecraft server, or `discord_bot` to scaffold and run a bot.
+the app is intentionally generic. **plugins teach it how to run each type of server.** install a plugin for the server type you want to run — try the game server plugin for a minecraft server, or `discord_bot` to scaffold and run a bot.
 
 plugins ship as `.kern` files (a zip with a `manifest.json` and an optional `dist/` ui bundle). double-clicking a `.kern` file opens kern via the `kern://install` deep link.
 
@@ -30,6 +30,6 @@ plugins ship as `.kern` files (a zip with a `manifest.json` and an optional `dis
 2. fill the config form (rendered dynamically from the plugin's `configSchema`).
 3. hit `start`. stdout/stderr stream live to the terminal, appended to `<instance>/latest.log`, with full ansi color.
 4. the input box is a command dispatcher: `start` / `stop` / `restart` / `install` trigger lifecycle; anything else is piped to stdin.
-5. `stop` triggers a **graceful shutdown with a 15-second timeout** before hard-kill — tuned so minecraft world saves (chunk flush + level.dat) complete first.
+5. `stop` triggers a **graceful shutdown with a 15-second timeout** before hard-kill — tuned so in-flight requests finish (active connections drain) first.
 
 > **note** per-process telemetry (cpu + ram via `sysinfo`) shows as a reactor channel bar that turns amber above 90% cpu and red on fault.

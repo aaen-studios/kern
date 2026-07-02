@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { KernWordmark } from "@/components/brand/RadarMark";
+import { UserMenu } from "@/components/auth/UserMenu";
+import { useAuth } from "@/components/auth/AuthProvider";
 
 const NAV_LINKS = [
   { href: "/#features", label: "features" },
@@ -14,6 +16,7 @@ const NAV_LINKS = [
 export function StickyNav() {
   // Fades in opacity as you scroll (tied to scrollY).
   const [scrolled, setScrolled] = useState(false);
+  const { user, loading } = useAuth();
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 24);
@@ -52,6 +55,7 @@ export function StickyNav() {
               </li>
             ))}
           </ul>
+          {!loading && user && <UserMenu />}
           <Link
             href="/#download"
             className="inline-flex items-center bg-signal-high px-3 py-1.5 font-mono text-xs lowercase text-bg-core transition hover:brightness-110"

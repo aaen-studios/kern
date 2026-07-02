@@ -2,12 +2,9 @@ import { getAllReleases, getRelease } from "@/lib/github";
 import { Hero } from "@/components/landing/Hero";
 import { SignalRadarStrip } from "@/components/landing/SignalRadarStrip";
 import { TerminalMock } from "@/components/landing/TerminalMock";
-import { ReactorMock } from "@/components/landing/ReactorMock";
 import { LifecycleMock } from "@/components/landing/LifecycleMock";
 import { FileEditorMock } from "@/components/landing/FileEditorMock";
 import { PluginCards } from "@/components/landing/PluginCards";
-import { AutoUpdateSection } from "@/components/landing/AutoUpdateSection";
-import { RoadmapStrip } from "@/components/landing/RoadmapStrip";
 import { DownloadSection } from "@/components/download/DownloadSection";
 import { MiniChangelog } from "@/components/landing/MiniChangelog";
 
@@ -27,11 +24,9 @@ export default async function Home() {
       <Hero release={release} />
       <SignalRadarStrip />
       <TerminalMock />
-      <ReactorMock />
       <LifecycleMock />
       <FileEditorMock />
       <PluginCards />
-      <AutoUpdateSection />
 
       {/* mini-changelog excerpt above the download cards */}
       <section className="mx-auto max-w-[1080px] px-4 py-12 sm:px-6">
@@ -39,7 +34,6 @@ export default async function Home() {
       </section>
 
       <DownloadSection release={release} />
-      <RoadmapStrip />
     </>
   );
 }

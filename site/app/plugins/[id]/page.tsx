@@ -1,7 +1,14 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getPlugin, getPluginIds, isOfficial, avgRating, latestVersion, formatRelativeTime } from "@/lib/registry";
+import {
+  getPlugin,
+  getPluginIds,
+  isOfficial,
+  avgRating,
+  latestVersion,
+  formatRelativeTime,
+} from "@/lib/registry";
 import { Markdown } from "@/lib/markdown";
 import { InstallButton } from "@/components/plugins/InstallButton";
 import { ConfigPreview } from "@/components/plugins/ConfigPreview";
@@ -9,16 +16,19 @@ import { VersionTable } from "@/components/plugins/VersionTable";
 import { Badge, VerifiedBadge } from "@/components/ui/Badge";
 import { MatrixDivider } from "@/components/ui/MatrixBorder";
 import { SectionHeading } from "@/components/ui/Reveal";
+import { UpvoteButton } from "@/components/plugins/UpvoteButton";
+import { ReportButton } from "@/components/plugins/ReportButton";
 
-export function generateStaticParams() {
-  return getPluginIds().map((id) => ({ id }));
+export async function generateStaticParams() {
+  const ids = await getPluginIds();
+  return ids.map((id) => ({ id }));
 }
 
 export async function generateMetadata(
   props: PageProps<"/plugins/[id]">,
 ): Promise<Metadata> {
   const { id } = await props.params;
-  const plugin = getPlugin(id);
+  const plugin = await getPlugin(id);
   if (!plugin) return { title: "not found" };
   return {
     title: plugin.display_name,
@@ -26,21 +36,16 @@ export async function generateMetadata(
   };
 }
 
-export default async function PluginDetailPage(props: PageProps<"/plugins/[id]">) {
+export default async function PluginDetailPage(
+  props: PageProps<"/plugins/[id]">,
+) {
   const { id } = await props.params;
-  const plugin = getPlugin(id);
+  const plugin = await getPlugin(id);
   if (!plugin) notFound();
 
   const official = isOfficial(plugin.author);
   const v = latestVersion(plugin);
   const rating = avgRating(plugin);
-
-  // rating histogram (mock distribution from the aggregate)
-  const histogram = [5, 4, 3, 2, 1].map((stars) => {
-    // approximate spread centered on the average
-    const dist = Math.max(0, 1 - Math.abs(stars - Math.round(rating)) * 0.4);
-    return { stars, pct: Math.round(dist * 100) };
-  });
 
   const jsonLd = {
     "@context": "https://schema.org",
@@ -49,12 +54,15 @@ export default async function PluginDetailPage(props: PageProps<"/plugins/[id]">
     applicationCategory: "UtilitiesApplication",
     operatingSystem: "Windows, macOS, Linux",
     description: plugin.description,
-    author: { "@type": "Person", name: plugin.author },
+    author: {
+      "@type": "Person",
+      name: plugin.author_github ?? plugin.author,
+    },
     softwareVersion: v.version,
     aggregateRating: {
       "@type": "AggregateRating",
       ratingValue: rating.toFixed(1),
-      ratingCount: plugin.rating_count,
+      ratingCount: plugin.rating_count || 1,
     },
     offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
   };
@@ -88,18 +96,21 @@ export default async function PluginDetailPage(props: PageProps<"/plugins/[id]">
           </div>
           <p className="font-mono text-xs text-signal-low">
             <Link
-              href={`/plugins/publishers/${encodeURIComponent(plugin.author)}`}
+              href={`/plugins/publishers/${encodeURIComponent(plugin.author_github ?? plugin.author)}`}
               className="hover:text-signal-high"
             >
-              {plugin.author}
+              {plugin.author_github ?? plugin.author}
             </Link>{" "}
-            · {plugin.id} · v{v.version} · updated {formatRelativeTime(plugin.updated_at)}
+            · {plugin.id} · v{v.version} · updated{" "}
+            {formatRelativeTime(plugin.updated_at)}
           </p>
           <p className="mt-4 font-mono text-sm leading-relaxed text-zinc-300">
             {plugin.description}
           </p>
           <div className="mt-4 flex flex-wrap items-center gap-2">
-            <Badge tone={official ? "signal" : "muted"}>{plugin.category}</Badge>
+            <Badge tone={official ? "signal" : "muted"}>
+              {plugin.category}
+            </Badge>
             {plugin.tags.map((t) => (
               <Badge key={t} tone="muted">
                 {t}
@@ -199,29 +210,20 @@ export default async function PluginDetailPage(props: PageProps<"/plugins/[id]">
       <section className="mb-12">
         <SectionHeading kicker="stats" title="registry signal" />
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-          <Stat label="installs" value={plugin.install_count.toLocaleString()} />
-          <Stat label="rating" value={`★ ${rating.toFixed(1)}`} />
-          <Stat label="reviews" value={String(plugin.rating_count)} />
+          <Stat
+            label="installs"
+            value={plugin.install_count.toLocaleString()}
+          />
+          <Stat label="upvotes" value={String(plugin.rating_sum)} />
           <Stat label="versions" value={String(plugin.versions.length)} />
         </div>
-
-        {/* rating histogram (mock distribution) */}
-        <div className="mt-6 max-w-sm">
-          {histogram.map((h) => (
-            <div key={h.stars} className="mb-1 flex items-center gap-2">
-              <span className="w-8 font-mono text-[11px] text-signal-low">
-                {h.stars}★
-              </span>
-              <div className="h-1.5 flex-1 bg-grid-bounds">
-                <div
-                  className="h-full bg-signal-high"
-                  style={{ width: `${h.pct}%` }}
-                />
-              </div>
-            </div>
-          ))}
-        </div>
       </section>
+
+      {/* upvote + report */}
+      <div className="mb-12 flex items-center gap-4">
+        <UpvoteButton pluginId={plugin.id} initialUpvotes={plugin.rating_sum} />
+        <ReportButton pluginId={plugin.id} pluginName={plugin.display_name} />
+      </div>
 
       {/* trust footer */}
       <MatrixDivider className="my-8 opacity-50" />
@@ -233,14 +235,6 @@ export default async function PluginDetailPage(props: PageProps<"/plugins/[id]">
           kern plugins run with full local privileges. install only from authors
           you trust.
         </p>
-        <a
-          href="https://github.com/ellipog/kern-registry/issues"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="mt-2 inline-block font-mono text-[11px] lowercase text-signal-low transition hover:text-signal-high"
-        >
-          report this plugin ↗
-        </a>
       </div>
     </main>
   );
@@ -248,9 +242,14 @@ export default async function PluginDetailPage(props: PageProps<"/plugins/[id]">
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="bg-bg-surface/40 p-4" style={{ boxShadow: "inset 0 0 0 1px rgba(22,25,32,0.9)" }}>
+    <div
+      className="bg-bg-surface/40 p-4"
+      style={{ boxShadow: "inset 0 0 0 1px rgba(22,25,32,0.9)" }}
+    >
       <p className="font-mono text-lg text-signal-high">{value}</p>
-      <p className="font-mono text-[11px] lowercase text-signal-low">{label}</p>
+      <p className="font-mono text-[11px] lowercase text-signal-low">
+        {label}
+      </p>
     </div>
   );
 }

@@ -76,7 +76,7 @@ export function ReactorMock() {
           >
             <div className="mb-5 flex items-center justify-between border-b border-grid-bounds/50 pb-3">
               <span className="font-mono text-[11px] lowercase text-signal-low">
-                minecraft_java · reactor
+                web_api · reactor
               </span>
               <span className="font-mono text-[11px] lowercase text-signal-high">
                 running

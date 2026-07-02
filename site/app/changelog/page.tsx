@@ -24,7 +24,7 @@ export default async function ChangelogPage() {
         <p className="mt-3 font-mono text-xs text-signal-low">
           every release, from{" "}
           <a
-            href="https://github.com/ellipog/kern/releases"
+            href="https://github.com/aaen-studios/kern/releases"
             target="_blank"
             rel="noopener noreferrer"
             className="text-signal-high underline underline-offset-2"

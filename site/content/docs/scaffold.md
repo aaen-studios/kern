@@ -12,9 +12,9 @@ the `scaffold` block declares starter files kern writes into a fresh instance di
 
 ```jsonc
 "scaffold": {
-  "eula":   { "path": "eula.txt",   "content": "eula={{userOverrides.accept_eula}}\n" },
-  "readme": { "path": "README.txt", "content": "Minecraft Server ({{userOverrides.mc_version}})…" },
-  "props":  { "path": "server.properties", "content": "…", "when": "{{userOverrides.runtime}} == 'paper'" }
+  "env":    { "path": ".env",   "content": "PORT={{userOverrides.port}}\nLOG_LEVEL={{userOverrides.log_level}}\n" },
+  "readme": { "path": "README.md", "content": "Web API ({{userOverrides.port}})…" },
+  "entry":  { "path": "app.js", "content": "…", "when": "{{userOverrides.runtime}} == 'node'" }
 }
 ```
 

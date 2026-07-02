@@ -8,7 +8,7 @@ const ITEMS: Array<{ label: string; status: "wave" | "breathe" | "idle"; note: s
   { label: "macos + linux signed builds", status: "breathe", note: "windows ships first" },
   { label: "in-app plugin browser", status: "idle", note: "consume this registry from inside kern" },
   { label: "plugin signing", status: "idle", note: "verified publishers" },
-  { label: "backup/restore for more server types", status: "idle", note: "beyond minecraft worlds" },
+  { label: "backup/restore for more server types", status: "idle", note: "for all server types" },
   { label: "telemetry history + charts", status: "idle", note: "beyond live readouts" },
 ];
 

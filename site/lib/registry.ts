@@ -1,10 +1,13 @@
 /*
-  Plugin registry types + accessors. Shaped to mirror the future Cloudflare
-  Worker API (§6) so swapping the seed fixture for a live backend is a one-line
-  change: replace the body of these functions with fetch() calls to the Worker.
-  For now they read the static seed (server-side import → fully static site).
+  Plugin registry types + accessors. Dual-mode:
+  - LIVE MODE: queries Supabase (when NEXT_PUBLIC_SUPABASE_URL is set)
+  - SEED MODE: reads from seed.json (static fallback, offline builds)
+
+  The public types are shared so pages work identically regardless of source.
 */
 import seed from "@/content/plugins/seed.json";
+
+// ── Types ────────────────────────────────────────────────────────
 
 export type Category =
   | "game-server"
@@ -36,7 +39,7 @@ export interface Plugin {
   id: string;
   display_name: string;
   description: string;
-  author: string; // GitHub login or 'kern/official' | 'kern/sample'
+  author: string;
   category: Category;
   tags: string[];
   config_schema?: ConfigField[];
@@ -50,6 +53,9 @@ export interface Plugin {
   install_count: number;
   rating_sum: number;
   rating_count: number;
+  /** Live-only: GitHub profile fields (set by API transform) */
+  author_github?: string;
+  author_avatar?: string;
 }
 
 export const ALL_CATEGORIES: Category[] = [
@@ -61,19 +67,112 @@ export const ALL_CATEGORIES: Category[] = [
   "other",
 ];
 
-const plugins = seed.plugins as Plugin[];
-
 export interface PluginQuery {
   q?: string;
   category?: string;
   tag?: string;
   author?: string;
   verified?: boolean;
-  sort?: "popular" | "recent" | "rating";
+  sort?: "popular" | "recent" | "rating" | "upvotes";
 }
 
-export function getPlugins(query: PluginQuery = {}): Plugin[] {
-  let result = [...plugins];
+// ── Seed data (fallback) ─────────────────────────────────────────
+
+const seedPlugins = seed.plugins as Plugin[];
+
+// ── Live functions (Supabase) ────────────────────────────────────
+
+/**
+ * True when Supabase env vars are configured → use live mode.
+ */
+function isLive(): boolean {
+  return !!(
+    typeof process !== "undefined" &&
+    process.env.NEXT_PUBLIC_SUPABASE_URL &&
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  );
+}
+
+/**
+ * Fetch plugins from the API (server-side call to our own route).
+ * Keeps server components simple: one fetch, fully typed response.
+ */
+async function fetchFromApi<T>(path: string): Promise<T | null> {
+  try {
+    const base =
+      process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+    const res = await fetch(`${base}${path}`, {
+      next: { revalidate: 60 }, // ISR: revalidate every 60s
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
+function mapLivePlugin(raw: Record<string, unknown>): Plugin {
+  const versions = (raw.plugin_versions as Record<string, unknown>[] | undefined) ?? [];
+  return {
+    id: raw.slug as string,
+    display_name: raw.display_name as string,
+    description: raw.description as string,
+    author: (raw.author_github as string) ?? (raw.author as string) ?? "unknown",
+    category: raw.category as Category,
+    tags: (raw.tags as string[]) ?? [],
+    config_schema: raw.config_schema as ConfigField[] | undefined,
+    versions: versions.map(mapLiveVersion),
+    readme_md: (raw.readme_md as string) ?? "",
+    repo_url: (raw.repo_url as string) ?? undefined,
+    homepage_url: (raw.homepage_url as string) ?? undefined,
+    featured: (raw.featured as boolean) ?? false,
+    created_at: new Date(raw.created_at as string).getTime(),
+    updated_at: new Date(raw.updated_at as string).getTime(),
+    install_count: (raw.install_count as number) ?? 0,
+    rating_sum: (raw.upvotes as number) ?? 0, // upvotes → rating_sum for compatibility
+    rating_count: 0,
+    author_github: (raw.author_github as string) ?? undefined,
+    author_avatar: (raw.author_avatar as string) ?? undefined,
+  };
+}
+
+function mapLiveVersion(raw: Record<string, unknown>): PluginVersion {
+  return {
+    version: raw.version as string,
+    "kern-compat": raw.kern_compat as string | undefined,
+    download_url: `/api/download?id=${raw.plugin_id as string}&v=${raw.version as string}`,
+    sha256: raw.sha256 as string | undefined,
+    size_bytes: (raw.size_bytes as number) ?? 0,
+    changelog: (raw.changelog as string) ?? undefined,
+    created_at: new Date(raw.created_at as string).getTime(),
+  };
+}
+
+// ── Public API ───────────────────────────────────────────────────
+
+export async function getPlugins(
+  query: PluginQuery = {},
+): Promise<Plugin[]> {
+  if (isLive()) {
+    const params = new URLSearchParams();
+    if (query.q) params.set("q", query.q);
+    if (query.category && query.category !== "all")
+      params.set("category", query.category);
+    if (query.tag) params.set("tag", query.tag);
+    if (query.author) params.set("author", query.author);
+    if (query.verified) params.set("verified", "true");
+    if (query.sort) params.set("sort", query.sort);
+
+    const qs = params.toString();
+    const data = await fetchFromApi<Record<string, unknown>[]>(
+      `/api/plugins${qs ? `?${qs}` : ""}`,
+    );
+    if (data) return data.map(mapLivePlugin);
+    // fallback to seed on fetch failure
+  }
+
+  // ── Seed fallback ──────────────────────────────────
+  let result = [...seedPlugins];
 
   if (query.q) {
     const q = query.q.toLowerCase();
@@ -106,6 +205,9 @@ export function getPlugins(query: PluginQuery = {}): Plugin[] {
     case "rating":
       result.sort((a, b) => avgRating(b) - avgRating(a));
       break;
+    case "upvotes":
+      result.sort((a, b) => b.rating_sum - a.rating_sum);
+      break;
     case "popular":
     default:
       result.sort((a, b) => b.install_count - a.install_count);
@@ -113,50 +215,103 @@ export function getPlugins(query: PluginQuery = {}): Plugin[] {
   return result;
 }
 
-export function getPlugin(id: string): Plugin | null {
-  return plugins.find((p) => p.id === id) ?? null;
+export async function getPlugin(id: string): Promise<Plugin | null> {
+  if (isLive()) {
+    // For live mode we need to fetch all and find by slug, or add a slug endpoint
+    const plugins = await getPlugins();
+    return plugins.find((p) => p.id === id) ?? null;
+  }
+
+  return seedPlugins.find((p) => p.id === id) ?? null;
 }
 
-export function getPluginsByAuthor(author: string): Plugin[] {
-  return plugins.filter((p) => p.author === author);
+export async function getPluginsByAuthor(
+  author: string,
+): Promise<Plugin[]> {
+  return getPlugins({ author });
 }
 
-export function getPublishers(): { author: string; count: number; official: boolean }[] {
+export async function getPublishers(): Promise<
+  { author: string; count: number; official: boolean; avatar?: string }[]
+> {
+  if (isLive()) {
+    const all = await getPlugins();
+    const map = new Map<string, { count: number; avatar?: string }>();
+    for (const p of all) {
+      const key = p.author_github ?? p.author;
+      const existing = map.get(key) ?? { count: 0, avatar: p.author_avatar };
+      existing.count++;
+      map.set(key, existing);
+    }
+    return Array.from(map.entries())
+      .map(([author, info]) => ({
+        author,
+        count: info.count,
+        official: author === "ellipog",
+        avatar: info.avatar,
+      }))
+      .sort((a, b) => b.count - a.count);
+  }
+
   const map = new Map<string, number>();
-  for (const p of plugins) {
+  for (const p of seedPlugins) {
     map.set(p.author, (map.get(p.author) ?? 0) + 1);
   }
   return Array.from(map.entries())
-    .map(([author, count]) => ({ author, count, official: isOfficial(author) }))
+    .map(([author, count]) => ({
+      author,
+      count,
+      official: isOfficial(author),
+    }))
     .sort((a, b) => b.count - a.count);
 }
 
-export function getAllTags(): string[] {
+export async function getAllTags(): Promise<string[]> {
+  if (isLive()) {
+    const all = await getPlugins();
+    const set = new Set<string>();
+    for (const p of all) for (const t of p.tags) set.add(t);
+    return Array.from(set).sort();
+  }
+
   const set = new Set<string>();
-  for (const p of plugins) for (const t of p.tags) set.add(t);
+  for (const p of seedPlugins) for (const t of p.tags) set.add(t);
   return Array.from(set).sort();
 }
 
-export function getPluginIds(): string[] {
-  return plugins.map((p) => p.id);
+export async function getPluginIds(): Promise<string[]> {
+  if (isLive()) {
+    const all = await getPlugins();
+    return all.map((p) => p.id);
+  }
+
+  return seedPlugins.map((p) => p.id);
 }
 
-export function getAuthors(): string[] {
-  return Array.from(new Set(plugins.map((p) => p.author))).sort();
+export async function getAuthors(): Promise<string[]> {
+  if (isLive()) {
+    const pubs = await getPublishers();
+    return pubs.map((p) => p.author);
+  }
+
+  return Array.from(new Set(seedPlugins.map((p) => p.author))).sort();
 }
 
-// ---- helpers ----
+// ── Helpers ──────────────────────────────────────────────────────
 
 export function isOfficial(author: string): boolean {
-  return author === "kern/official" || author === "kern/sample";
+  return (
+    author === "kern/official" ||
+    author === "kern/sample" ||
+    author === "ellipog"
+  );
 }
 
 export function avgRating(p: Plugin): number {
-  return p.rating_count === 0 ? 0 : p.rating_sum / p.rating_count;
+  return p.rating_count === 0 ? p.rating_sum : p.rating_sum / p.rating_count;
 }
 
 export function latestVersion(p: Plugin): PluginVersion {
-  // versions are pre-sorted newest-first in the seed; fall back to max by date.
   if (p.versions.length === 0) {
     return {
       version: "0.0.0",

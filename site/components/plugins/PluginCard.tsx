@@ -1,6 +1,6 @@
 import Link from "next/link";
 import type { Plugin } from "@/lib/registry";
-import { avgRating, formatRelativeTime, isOfficial, latestVersion } from "@/lib/registry";
+import { formatRelativeTime, isOfficial, latestVersion } from "@/lib/registry";
 import { Badge, VerifiedBadge } from "@/components/ui/Badge";
 
 /*
@@ -20,7 +20,6 @@ const CATEGORY_GLYPH: Record<string, string> = {
 export function PluginCard({ plugin }: { plugin: Plugin }) {
   const v = latestVersion(plugin);
   const official = isOfficial(plugin.author);
-  const rating = avgRating(plugin);
 
   return (
     <Link
@@ -64,7 +63,7 @@ export function PluginCard({ plugin }: { plugin: Plugin }) {
         </div>
         <div className="flex items-center gap-3 font-mono text-[10px] text-signal-low">
           <span>↓ {plugin.install_count.toLocaleString()}</span>
-          <span>★ {rating.toFixed(1)}</span>
+	          <span>↑ {plugin.rating_sum}</span>
           <span className="hidden sm:inline">{formatRelativeTime(plugin.updated_at)}</span>
         </div>
       </div>

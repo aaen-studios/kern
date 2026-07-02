@@ -14,10 +14,10 @@ description: dynamic config forms the host renders for each instance.
 
 ```jsonc
 "configSchema": [
-  { "key": "runtime", "label": "Server Software", "type": "select",
-    "options": ["vanilla","paper","purpur","fabric","forge","neoforge","quilt"], "default": "purpur" },
-  { "key": "mc_version", "label": "Minecraft Version", "type": "text", "default": "1.21" },
-  { "key": "jvm_args",   "label": "JVM Arguments", "type": "text", "default": "-Xms2G -Xmx2G" }
+  { "key": "port", "label": "Port", "type": "text", "default": "3000" },
+  { "key": "log_level", "label": "Log Level", "type": "select",
+    "options": ["debug","info","warn","error"], "default": "info" },
+  { "key": "max_connections", "label": "Max Connections", "type": "text", "default": "100" }
 ]
 ```
 
@@ -31,6 +31,6 @@ description: dynamic config forms the host renders for each instance.
 
 ## dependsOn — cascading defaults
 
-fields may declare `dependsOn` to cascade defaults when another field changes. the minecraft plugin uses this so that picking `fabric` adjusts the suggested installer and `server_jar`.
+fields may declare `dependsOn` to cascade defaults when another field changes. for example, a plugin can use this so that picking a runtime adjusts the suggested entry file and build command.
 
 > **note** keep config fields minimal. every field is one more decision a user has to make to get a server running. ship sensible `default`s.

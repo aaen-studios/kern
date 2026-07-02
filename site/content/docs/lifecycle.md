@@ -44,6 +44,6 @@ set `useShell: true` to run the command through a shell. needed for some install
 
 ## graceful shutdown
 
-`stop` triggers a **graceful shutdown with a 15-second timeout** before hard-kill. this is deliberately tuned so minecraft world saves complete — chunk flush plus `level.dat` — before teardown.
+`stop` triggers a **graceful shutdown with a 15-second timeout** before hard-kill. this is deliberately tuned so active work completes — pending operations drain before teardown.
 
 > **warn** don&rsquo;t put destructive commands in `stop`. the host will hard-kill after 15s if your command hasn&rsquo;t returned, but you should design `stop` to return promptly (e.g. send a `stop` to the server stdin, not a `kill -9`).

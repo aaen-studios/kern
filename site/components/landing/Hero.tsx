@@ -4,12 +4,12 @@ import { VersionBadge } from "@/components/download/VersionBadge";
 import { StatusDots } from "@/components/ui/StatusDots";
 import type { Release } from "@/lib/github";
 
-const GITHUB = "https://github.com/ellipog/kern";
+const GITHUB = "https://github.com/aaen-studios/kern";
 
 /*
   §10.2 — Hero. Full viewport. Animated Signal Radar shader behind the
   headline (aria-hidden). Foreground: lowercase H1, one-line subhead naming
-  minecraft/bots/apis, primary download + view-on-github, live version badge.
+  servers/bots/apis, primary download + view-on-github, live version badge.
 */
 export function Hero({ release }: { release: Release | null }) {
   return (
@@ -41,7 +41,7 @@ export function Hero({ release }: { release: Release | null }) {
         <p className="mt-6 max-w-xl font-mono text-sm leading-relaxed text-zinc-300">
           kern turns any folder on your computer into a managed server instance
           — with a live terminal, per-process telemetry, and graceful lifecycle.
-          minecraft servers, discord bots, local apis. teach it new types with
+          web servers, discord bots, local apis. teach it new types with
           plugins.
         </p>
 

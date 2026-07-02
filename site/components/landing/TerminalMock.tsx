@@ -13,37 +13,37 @@ const LOGS: Array<{ ts: string; level: string; msg: string; tone: string }> = [
   {
     ts: "12:04:28",
     level: "INFO",
-    msg: "Starting minecraft server (paper 1.21)",
+    msg: "Starting web server (node 22)",
     tone: "text-zinc-300",
   },
   {
     ts: "12:04:29",
     level: "WARN",
-    msg: "Loading libraries, please wait...",
+    msg: "No .env found, using defaults",
     tone: "text-warn-vector",
   },
   {
     ts: "12:04:31",
     level: "INFO",
-    msg: 'Done (3.2s)! For help, type "help"',
+    msg: "listening on 0.0.0.0:3000",
     tone: "text-signal-high",
   },
   {
     ts: "12:05:02",
     level: "INFO",
-    msg: "<elliot> joined the game",
+    msg: "GET /api/health 200 2ms",
     tone: "text-zinc-300",
   },
   {
     ts: "12:05:44",
     level: "INFO",
-    msg: "Saving the game (this may take a moment!)",
+    msg: "POST /api/users 201 14ms",
     tone: "text-zinc-400",
   },
   {
     ts: "12:05:44",
     level: "INFO",
-    msg: "Saved the game",
+    msg: "server ready",
     tone: "text-signal-high",
   },
 ];
@@ -78,7 +78,7 @@ export function TerminalMock() {
               <span className="h-2.5 w-2.5 rounded-full bg-signal-high/70" />
             </div>
             <span className="font-mono text-[11px] lowercase text-signal-low">
-              minecraft_java · latest.log
+              web_api · latest.log
             </span>
             <StatusDots status="wave" label="streaming — running" count={5} />
           </div>

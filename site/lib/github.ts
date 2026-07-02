@@ -22,7 +22,7 @@ export interface Release {
 
 const API = "https://api.github.com/repos/ellipog/kern";
 export const RELEASES_PAGE =
-  "https://github.com/ellipog/kern/releases/latest";
+  "https://github.com/aaen-studios/kern/releases/latest";
 
 function authHeaders(): Record<string, string> {
   const h: Record<string, string> = { Accept: "application/vnd.github.v3+json" };

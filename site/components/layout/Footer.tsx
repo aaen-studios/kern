@@ -2,7 +2,7 @@ import Link from "next/link";
 import { KernWordmark } from "@/components/brand/RadarMark";
 import { MatrixDivider } from "@/components/ui/MatrixBorder";
 
-const GITHUB = "https://github.com/ellipog/kern";
+const GITHUB = "https://github.com/aaen-studios/kern";
 
 const COLUMNS = [
   {
@@ -29,7 +29,6 @@ const COLUMNS = [
       { href: GITHUB, label: "github", external: true },
       { href: `${GITHUB}/discussions`, label: "discussions", external: true },
       { href: `${GITHUB}/issues`, label: "issues", external: true },
-      { href: "#", label: "discord (soon)" },
     ],
   },
 ];
@@ -86,7 +85,7 @@ export function Footer() {
             built with tauri · react · rust · tailwind
           </p>
           <p className="font-mono text-[11px] lowercase text-signal-low">
-            © {new Date().getFullYear()} kern — mit license
+            © {new Date().getFullYear()} aaen studios
           </p>
         </div>
       </div>

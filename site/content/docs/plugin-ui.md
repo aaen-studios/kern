@@ -34,7 +34,7 @@ export function mount(
   - `registerToolbarAction(...)` — add a toolbar button.
   - `registerSidebarItem(...)` — add a sidebar entry.
 
-the minecraft plugin uses `registerTab` to add its **Setup** and **Chat** tabs.
+plugins use `registerTab` to add custom tabs to the server detail view.
 
 ## isolation
 
