@@ -2,6 +2,7 @@ import type { Release } from "@/lib/github";
 import { formatVersion } from "@/lib/github";
 import { Markdown } from "@/lib/markdown";
 import { RadarMark } from "@/components/brand/RadarMark";
+import { Spotlight } from "@/components/ui/Spotlight";
 
 /*
   §9.1 — a single release entry. Version badge (radar glyph + v{tag}),
@@ -18,6 +19,7 @@ export function ReleaseCard({ release }: { release: Release }) {
     : formatVersion(release.tag_name);
 
   return (
+    <Spotlight>
     <article className="border-l border-grid-bounds pl-6">
       <div className="mb-3 flex flex-wrap items-center gap-3">
         <RadarMark size="sm" />
@@ -47,5 +49,6 @@ export function ReleaseCard({ release }: { release: Release }) {
         <p className="font-mono text-xs text-signal-low">no release notes.</p>
       )}
     </article>
+    </Spotlight>
   );
 }

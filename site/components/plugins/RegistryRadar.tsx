@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback, useMemo } from "react";
+import { useRef, useState, useCallback, useMemo, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useReducedMotion } from "motion/react";
+import { useRafLoop } from "@/hooks/useRafLoop";
+import { setupCanvasDPR } from "@/lib/canvas";
 import type { Plugin } from "@/lib/registry";
 
 /*
@@ -59,8 +61,6 @@ export function RegistryRadar({ plugins }: { plugins: Plugin[] }) {
   const router = useRouter();
   const reduce = useReducedMotion();
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const rafRef = useRef<number | null>(null);
-  const pluginsRef = useRef(plugins);
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Tooltip state (doesn't affect canvas)
@@ -69,11 +69,6 @@ export function RegistryRadar({ plugins }: { plugins: Plugin[] }) {
     y: number;
     plugin: Plugin;
   } | null>(null);
-
-  // Keep plugins ref updated for render loop
-  useEffect(() => {
-    pluginsRef.current = plugins;
-  }, [plugins]);
 
   // ── Compute blip data (memoized) ─────────────────────────────────
   const blips = useMemo(() => {
@@ -104,149 +99,125 @@ export function RegistryRadar({ plugins }: { plugins: Plugin[] }) {
     });
   }, [plugins]);
 
-  // ── Canvas render loop (stable across re-renders) ──────────────────
-  const render = useCallback(() => {
+  // keep the latest blips available to the draw loop without restarting it.
+  // mirrored in an effect (not during render) per the React refs rule.
+  const blipsRef = useRef(blips);
+  const reduceRef = useRef(reduce);
+  useEffect(() => {
+    blipsRef.current = blips;
+    reduceRef.current = reduce;
+  });
+
+  // ── Canvas render loop (stable, reads from refs) ──────────────────
+  useRafLoop((t) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const rect = canvas.getBoundingClientRect();
-    const width = rect.width;
-    const height = rect.height;
-    if (canvas.width !== Math.floor(width * dpr) || canvas.height !== Math.floor(height * dpr)) {
-      canvas.width = Math.floor(width * dpr);
-      canvas.height = Math.floor(height * dpr);
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    }
-
+    const { width, height } = setupCanvasDPR(canvas, ctx);
     const cx = width / 2;
     const cy = height / 2;
     const maxR = Math.min(width, height) * 0.38;
 
-    let t = 0;
-    let last = performance.now();
-    const frameInterval = 1000 / 30;
+    const isReduced = reduceRef.current;
+    const blipsCurrent = blipsRef.current;
 
-    const draw = (nowPerf: number) => {
-      const currentPlugins = pluginsRef.current;
-      const blipsCurrent = blips;
+    ctx.clearRect(0, 0, width, height);
 
-      rafRef.current = requestAnimationFrame(draw);
-      const dt = nowPerf - last;
-      if (dt < frameInterval) return;
-      last = nowPerf - (dt % frameInterval);
-      t += dt * 0.001;
+    // Background bloom
+    const bloom = ctx.createRadialGradient(cx, cy, 0, cx, cy, maxR * 1.2);
+    bloom.addColorStop(0, BLOOM);
+    bloom.addColorStop(1, "rgba(76,245,160,0)");
+    ctx.fillStyle = bloom;
+    ctx.fillRect(0, 0, width, height);
 
-      ctx.clearRect(0, 0, width, height);
-
-      // Background bloom
-      const bloom = ctx.createRadialGradient(cx, cy, 0, cx, cy, maxR * 1.2);
-      bloom.addColorStop(0, BLOOM);
-      bloom.addColorStop(1, "rgba(76,245,160,0)");
-      ctx.fillStyle = bloom;
-      ctx.fillRect(0, 0, width, height);
-
-      // Concentric rings (faint guide)
-      for (let i = 0; i < RING_COUNT; i++) {
-        const rr = ((i + 1) / (RING_COUNT + 1)) * maxR;
-        ctx.strokeStyle = "rgba(22,25,32,0.6)";
-        ctx.lineWidth = 0.5;
-        ctx.beginPath();
-        ctx.arc(cx, cy, rr, 0, Math.PI * 2);
-        ctx.stroke();
-
-        const labels = ["this week", "this month", "6 months", "older"];
-        ctx.fillStyle = "#4c525e";
-        ctx.font = "10px monospace";
-        ctx.textAlign = "left";
-        ctx.fillText(labels[i], cx + rr + 4, cy + 5);
-      }
-
-      // Sweep angle
-      const sweepAngle = t * SWEEP_SPEED;
-
-      // Draw blips
-      for (const blip of blipsCurrent) {
-        const r = (blip.ringIndex + 1) / (RING_COUNT + 1) * maxR;
-        const x = cx + Math.cos(blip.angle) * r;
-        const y = cy + Math.sin(blip.angle) * r;
-
-        let delta = blip.angle - sweepAngle;
-        while (delta < -Math.PI) delta += Math.PI * 2;
-        while (delta > Math.PI) delta -= Math.PI * 2;
-        const proximity = reduce ? 0.6 : Math.max(0, 1 - Math.abs(delta) / 0.5);
-
-        const baseOpacity = 0.4 + 0.6 * proximity;
-        const size = blip.size * (0.8 + 0.2 * proximity);
-
-        // Glow for active blip
-        if (proximity > 0.5) {
-          const g = ctx.createRadialGradient(x, y, 0, x, y, size * 3);
-          g.addColorStop(0, `rgba(76,245,160,${0.2 * proximity})`);
-          g.addColorStop(1, "rgba(76,245,160,0)");
-          ctx.fillStyle = g;
-          ctx.beginPath();
-          ctx.arc(x, y, size * 3, 0, Math.PI * 2);
-          ctx.fill();
-        }
-
-        // Blip body
-        ctx.globalAlpha = baseOpacity;
-        ctx.fillStyle = blip.installCount > 0 ? SIGNAL : SIGNAL_DIM;
-        ctx.beginPath();
-        ctx.arc(x, y, size, 0, Math.PI * 2);
-        ctx.fill();
-
-        ctx.strokeStyle = "rgba(76,245,160,0.3)";
-        ctx.lineWidth = 0.5;
-        ctx.stroke();
-        ctx.globalAlpha = 1;
-      }
-
-      // Sweep line
-      if (!reduce) {
-        const grad = ctx.createLinearGradient(
-          cx,
-          cy,
-          cx + Math.cos(sweepAngle) * maxR,
-          cy + Math.sin(sweepAngle) * maxR,
-        );
-        grad.addColorStop(0, "rgba(76,245,160,0.4)");
-        grad.addColorStop(1, "rgba(76,245,160,0)");
-        ctx.strokeStyle = grad;
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.moveTo(cx, cy);
-        ctx.lineTo(
-          cx + Math.cos(sweepAngle) * maxR,
-          cy + Math.sin(sweepAngle) * maxR,
-        );
-        ctx.stroke();
-      }
-
-      // Core
-      ctx.fillStyle = SIGNAL;
-      ctx.globalAlpha = 0.9;
+    // Concentric rings (faint guide)
+    for (let i = 0; i < RING_COUNT; i++) {
+      const rr = ((i + 1) / (RING_COUNT + 1)) * maxR;
+      ctx.strokeStyle = "rgba(22,25,32,0.6)";
+      ctx.lineWidth = 0.5;
       ctx.beginPath();
-      ctx.arc(cx, cy, Math.max(4, maxR * 0.05), 0, Math.PI * 2);
+      ctx.arc(cx, cy, rr, 0, Math.PI * 2);
+      ctx.stroke();
+
+      const labels = ["this week", "this month", "6 months", "older"];
+      ctx.fillStyle = "#4c525e";
+      ctx.font = "10px monospace";
+      ctx.textAlign = "left";
+      ctx.fillText(labels[i], cx + rr + 4, cy + 5);
+    }
+
+    // Sweep angle
+    const sweepAngle = t * SWEEP_SPEED;
+
+    // Draw blips
+    for (const blip of blipsCurrent) {
+      const r = (blip.ringIndex + 1) / (RING_COUNT + 1) * maxR;
+      const x = cx + Math.cos(blip.angle) * r;
+      const y = cy + Math.sin(blip.angle) * r;
+
+      let delta = blip.angle - sweepAngle;
+      while (delta < -Math.PI) delta += Math.PI * 2;
+      while (delta > Math.PI) delta -= Math.PI * 2;
+      const proximity = isReduced ? 0.6 : Math.max(0, 1 - Math.abs(delta) / 0.5);
+
+      const baseOpacity = 0.4 + 0.6 * proximity;
+      const size = blip.size * (0.8 + 0.2 * proximity);
+
+      // Glow for active blip
+      if (proximity > 0.5) {
+        const g = ctx.createRadialGradient(x, y, 0, x, y, size * 3);
+        g.addColorStop(0, `rgba(76,245,160,${0.2 * proximity})`);
+        g.addColorStop(1, "rgba(76,245,160,0)");
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(x, y, size * 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Blip body
+      ctx.globalAlpha = baseOpacity;
+      ctx.fillStyle = blip.installCount > 0 ? SIGNAL : SIGNAL_DIM;
+      ctx.beginPath();
+      ctx.arc(x, y, size, 0, Math.PI * 2);
       ctx.fill();
+
+      ctx.strokeStyle = "rgba(76,245,160,0.3)";
+      ctx.lineWidth = 0.5;
+      ctx.stroke();
       ctx.globalAlpha = 1;
-    };
+    }
 
-    rafRef.current = requestAnimationFrame(draw);
-    return () => {
-      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
-    };
-  }, [blips, reduce]);
+    // Sweep line
+    if (!isReduced) {
+      const grad = ctx.createLinearGradient(
+        cx,
+        cy,
+        cx + Math.cos(sweepAngle) * maxR,
+        cy + Math.sin(sweepAngle) * maxR,
+      );
+      grad.addColorStop(0, "rgba(76,245,160,0.4)");
+      grad.addColorStop(1, "rgba(76,245,160,0)");
+      ctx.strokeStyle = grad;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(
+        cx + Math.cos(sweepAngle) * maxR,
+        cy + Math.sin(sweepAngle) * maxR,
+      );
+      ctx.stroke();
+    }
 
-  // ── Lifecycle ────────────────────────────────────────────────────
-  useEffect(() => {
-    const cleanup = render();
-    return cleanup;
-  }, [render]);
+    // Core
+    ctx.fillStyle = SIGNAL;
+    ctx.globalAlpha = 0.9;
+    ctx.beginPath();
+    ctx.arc(cx, cy, Math.max(4, maxR * 0.05), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  });
 
   // ── Interaction: click to navigate, hover for tooltip ────────────
   const getPluginAt = useCallback(

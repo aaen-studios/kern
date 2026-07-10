@@ -7,6 +7,7 @@ import { FileEditorMock } from "@/components/landing/FileEditorMock";
 import { PluginCards } from "@/components/landing/PluginCards";
 import { DownloadSection } from "@/components/download/DownloadSection";
 import { MiniChangelog } from "@/components/landing/MiniChangelog";
+import { ScanDivider } from "@/components/ui/ScanDivider";
 
 /*
   Landing page (§10). Server component — fetches release data at build time
@@ -22,10 +23,15 @@ export default async function Home() {
   return (
     <>
       <Hero release={release} />
+      <ScanDivider />
       <SignalRadarStrip />
+      <ScanDivider />
       <TerminalMock />
+      <ScanDivider />
       <LifecycleMock />
+      <ScanDivider />
       <FileEditorMock />
+      <ScanDivider />
       <PluginCards />
 
       {/* mini-changelog excerpt above the download cards */}

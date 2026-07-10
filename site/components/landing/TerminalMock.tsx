@@ -4,6 +4,7 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { StatusDots } from "@/components/ui/StatusDots";
 import { SectionHeading, Reveal } from "@/components/ui/Reveal";
 import { useReducedMotion } from "motion/react";
+import { useSound } from "@/hooks/useSound";
 
 /*
   Live interactive terminal — §10.4.
@@ -56,6 +57,7 @@ function logLine(text: string, tone: LogEntry["tone"] = "info"): LogEntry {
 
 export function TerminalMock() {
   const reduce = useReducedMotion();
+  const { play } = useSound();
   const [logs, setLogs] = useState<LogEntry[]>([
     logLine("Terminal ready — type a command to begin", "dim"),
     logLine('Try: help, kern list, kern install <name>', "dim"),
@@ -231,6 +233,7 @@ export function TerminalMock() {
     e.preventDefault();
     e.stopPropagation();
     if (busy || !input.trim()) return;
+    play("blip"); // console ambience — command accepted
     runCommand(input.trim());
     setInput("");
   };

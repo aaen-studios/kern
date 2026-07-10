@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { KernWordmark } from "@/components/brand/RadarMark";
 import { SignInButton } from "@/components/auth/SignInButton";
 import { UserMenu } from "@/components/auth/UserMenu";
+import { SoundToggle } from "@/components/sound/SoundToggle";
 import { useAuth } from "@/components/auth/AuthProvider";
 
 const NAV_LINKS = [
@@ -56,6 +57,7 @@ export function StickyNav() {
             ))}
           </ul>
           {!loading && (user ? <UserMenu /> : <SignInButton />)}
+          <SoundToggle />
           <Link
             href="/#download"
             className="inline-flex items-center bg-signal-high px-3 py-1.5 font-mono text-xs lowercase text-bg-core transition hover:brightness-110"

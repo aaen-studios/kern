@@ -2,16 +2,16 @@ import { type NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 
 /**
- * Middleware that refreshes Supabase session cookies on every request.
+ * Proxy that refreshes Supabase session cookies on every request.
  * This keeps the session alive for server components and API routes.
  *
  * Only runs on routes that need session awareness (not static assets).
  */
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-  // If Supabase isn't configured, skip middleware entirely
+  // If Supabase isn't configured, skip proxy entirely
   if (!supabaseUrl || !supabaseAnonKey) {
     return NextResponse.next();
   }

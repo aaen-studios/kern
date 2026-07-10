@@ -29,6 +29,7 @@ const COLUMNS = [
       { href: GITHUB, label: "github", external: true },
       { href: `${GITHUB}/discussions`, label: "discussions", external: true },
       { href: `${GITHUB}/issues`, label: "issues", external: true },
+      { href: "/brand", label: "brand" },
     ],
   },
 ];

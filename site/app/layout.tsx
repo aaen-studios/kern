@@ -4,13 +4,20 @@ import "./globals.css";
 import { StickyNav } from "@/components/layout/StickyNav";
 import { Footer } from "@/components/layout/Footer";
 import { BackToTop } from "@/components/layout/BackToTop";
+import { SignalStrip } from "@/components/layout/SignalStrip";
+import { BootSequence } from "@/components/layout/BootSequence";
 import { AuthProvider } from "@/components/auth/AuthProvider";
+import { SoundProvider } from "@/components/sound/SoundProvider";
 import { Analytics } from "@vercel/analytics/next"
 
 const jetbrainsMono = JetBrains_Mono({
   subsets: ["latin"],
   display: "swap",
   variable: "--font-jetbrains-mono",
+  // self-host a deliberate weight range for hierarchy via weight contrast.
+  // note: JetBrains Mono has no `wdth` axis, so font-stretch is unavailable —
+  // hierarchy here is purely weight + size + colour.
+  weight: ["200", "400", "500", "700"],
 });
 
 export const metadata: Metadata = {
@@ -70,6 +77,8 @@ export default function RootLayout({
       className={`${jetbrainsMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
+        {/* one-time power-on boot sequence */}
+        <BootSequence />
         {/* skip link — first focusable element */}
         <a
           href="#main"
@@ -83,14 +92,18 @@ export default function RootLayout({
             __html: JSON.stringify(jsonLd).replace(/</g, "\\u003c"),
           }}
         />
-        <AuthProvider>
-          <StickyNav />
-          <div id="main" className="flex-1">
-            {children}
-          </div>
-        </AuthProvider>
-        <Footer />
-        <BackToTop />
+        <SoundProvider>
+          <AuthProvider>
+            <StickyNav />
+            {/* live signal strip pinned just under the nav */}
+            <SignalStrip />
+            <div id="main" className="flex-1">
+              {children}
+            </div>
+          </AuthProvider>
+          <Footer />
+          <BackToTop />
+        </SoundProvider>
         <Analytics />
       </body>
     </html>

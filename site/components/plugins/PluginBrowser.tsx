@@ -7,6 +7,7 @@ import type { Plugin } from "@/lib/registry";
 import { ALL_CATEGORIES, isOfficial } from "@/lib/registry";
 import { PluginCard } from "@/components/plugins/PluginCard";
 import { StatusDots } from "@/components/ui/StatusDots";
+import { Spotlight } from "@/components/ui/Spotlight";
 
 /*
   §7.1 — the interactive browser. Filters/sort/search all drive URL search
@@ -137,7 +138,9 @@ export function PluginBrowser({ all }: { all: Plugin[] }) {
       ) : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
           {filtered.map((p) => (
-            <PluginCard key={p.id} plugin={p} />
+            <Spotlight key={p.id}>
+              <PluginCard plugin={p} />
+            </Spotlight>
           ))}
         </div>
       )}

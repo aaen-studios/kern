@@ -5,7 +5,7 @@ import { getPluginIds, getPublishers } from "@/lib/registry";
 const BASE = "https://kern.aaenz.no";
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
-  const staticRoutes = ["", "/plugins", "/docs", "/changelog"].map((path) => ({
+  const staticRoutes = ["", "/plugins", "/docs", "/changelog", "/brand"].map((path) => ({
     url: `${BASE}${path}`,
     lastModified: new Date(),
     changeFrequency: "weekly" as const,

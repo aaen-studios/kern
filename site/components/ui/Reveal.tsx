@@ -47,7 +47,7 @@ export function SectionHeading({
         {"// "}
         {kicker}
       </p>
-      <h2 className="mt-2 font-mono text-2xl lowercase text-zinc-100 sm:text-3xl">
+      <h2 className="mt-2 font-mono text-2xl font-medium lowercase text-zinc-100 sm:text-3xl">
         {title}
       </h2>
       {children && (

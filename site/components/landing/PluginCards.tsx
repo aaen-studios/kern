@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { SectionHeading, Reveal } from "@/components/ui/Reveal";
 import { Badge, VerifiedBadge } from "@/components/ui/Badge";
+import { Spotlight } from "@/components/ui/Spotlight";
 
 /*
   §10.8 — Plugins. The two flagship first-party plugins as cards:
@@ -36,6 +37,7 @@ export function PluginCards() {
         <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
           {/* Minecraft Java */}
           <Reveal delay={0.05}>
+            <Spotlight className="h-full">
             <Link
               href="/plugins/minecraft_java"
               className="group flex h-full flex-col gap-4 bg-bg-core p-6 transition-colors hover:bg-bg-surface"
@@ -75,10 +77,12 @@ export function PluginCards() {
                 </div>
               </div>
             </Link>
+            </Spotlight>
           </Reveal>
 
           {/* Discord Bot */}
           <Reveal delay={0.1}>
+            <Spotlight className="h-full">
             <Link
               href="/plugins/discord_bot"
               className="group flex h-full flex-col gap-4 bg-bg-core p-6 transition-colors hover:bg-bg-surface"
@@ -118,6 +122,7 @@ export function PluginCards() {
                 </div>
               </div>
             </Link>
+            </Spotlight>
           </Reveal>
         </div>
 

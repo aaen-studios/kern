@@ -18,7 +18,7 @@ export default async function ChangelogPage() {
     <main className="mx-auto max-w-[820px] px-4 pb-24 pt-28 sm:px-6">
       <header className="mb-10">
         <p className="font-mono text-xs lowercase text-signal-low">{"// "}changelog</p>
-        <h1 className="mt-2 font-mono text-3xl lowercase text-zinc-100">
+        <h1 className="mt-2 font-mono text-3xl font-bold lowercase text-zinc-100">
           latest.log
         </h1>
         <p className="mt-3 font-mono text-xs text-signal-low">

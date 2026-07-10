@@ -10606,3 +10606,435 @@
 [16:25:40] SUCCESS: The process "node.exe" with PID 59096 has been terminated.
 [16:25:40] SUCCESS: The process "node.exe" with PID 20112 has been terminated.
 [16:25:40] error: script "dev" exited with code 1
+[22:14:52] SUCCESS: The process "node.exe" with PID 42648 has been terminated.
+[22:14:54] $ next dev
+[22:14:54] ▲ Next.js 16.2.10 (Turbopack)
+[22:14:54] - Local:         http://localhost:3000
+[22:14:54] - Network:       http://192.168.10.191:3000
+[22:14:54] - Environments: .env
+[22:14:54] ✓ Ready in 458ms
+[22:14:55] ⚠ The "middleware" file convention is deprecated. Please use "proxy" instead. Learn more: https://nextjs.org/docs/messages/middleware-to-proxy
+[22:14:55] 
+[22:14:55] Error: fetch failed
+[22:14:55]     at context.fetch (C:\Users\Ellio\Documents\GitHub\kern-web\node_modules\next\dist\server\web\sandbox\context.js:321:60)
+[22:14:55]     at C:\Users\Ellio\Documents\GitHub\kern-web\.next\dev\server\edge\chunks\node_modules_@supabase_auth-js_dist_module_0focj3n._.js:600:23
+[22:14:55]     at _handleRequest (C:\Users\Ellio\Documents\GitHub\kern-web\.next\dev\server\edge\chunks\node_modules_@supabase_auth-js_dist_module_0focj3n._.js:989:24)
+[22:14:55]     at _request (C:\Users\Ellio\Documents\GitHub\kern-web\.next\dev\server\edge\chunks\node_modules_@supabase_auth-js_dist_module_0focj3n._.js:976:24)
+[22:14:55]     at C:\Users\Ellio\Documents\GitHub\kern-web\.next\dev\server\edge\chunks\node_modules_@supabase_auth-js_dist_module_0focj3n._.js:7789:225
+[22:14:55]     at C:\Users\Ellio\Documents\GitHub\kern-web\.next\dev\server\edge\chunks\node_modules_@supabase_auth-js_dist_module_0focj3n._.js:675:42
+[22:14:55]     at C:\Users\Ellio\Documents\GitHub\kern-web\.next\dev\server\edge\chunks\node_modules_@supabase_auth-js_dist_module_0focj3n._.js:687:11
+[22:14:55]     at new Promise (<anonymous>)
+[22:14:55]     at retryable (C:\Users\Ellio\Documents\GitHub\kern-web\.next\dev\server\edge\chunks\node_modules_@supabase_auth-js_dist_module_0focj3n._.js:669:21)
+[22:14:55]     at SupabaseAuthClient._refreshAccessToken (C:\Users\Ellio\Documents\GitHub\kern-web\.next\dev\server\edge\chunks\node_modules_@supabase_auth-js_dist_module_0focj3n._.js:7784:224)
+[22:14:55]     at SupabaseAuthClient._callRefreshToken (C:\Users\Ellio\Documents\GitHub\kern-web\.next\dev\server\edge\chunks\node_modules_@supabase_auth-js_dist_module_0focj3n._.js:7975:48)
+[22:14:55]     at async SupabaseAuthClient.__loadSession (C:\Users\Ellio\Documents\GitHub\kern-web\.next\dev\server\edge\chunks\node_modules_@supabase_auth-js_dist_module_0focj3n._.js:6243:46)
+[22:14:55]     at async SupabaseAuthClient._useSession (C:\Users\Ellio\Documents\GitHub\kern-web\.next\dev\server\edge\chunks\node_modules_@supabase_auth-js_dist_module_0focj3n._.js:6172:28)
+[22:14:55]     at async SupabaseAuthClient._emitInitialSession (C:\Users\Ellio\Documents\GitHub\kern-web\.next\dev\server\edge\chunks\node_modules_@supabase_auth-js_dist_module_0focj3n._.js:7412:16)
+[22:14:55]     at async C:\Users\Ellio\Documents\GitHub\kern-web\.next\dev\server\edge\chunks\node_modules_@supabase_auth-js_dist_module_0focj3n._.js:7402:17 {
+[22:14:55]   
+[22:14:55] }
+[22:14:55] Error: fetch failed
+[22:14:55]     at context.fetch (C:\Users\Ellio\Documents\GitHub\kern-web\node_modules\next\dist\server\web\sandbox\context.js:321:60)
+[22:14:55]     at C:\Users\Ellio\Documents\GitHub\kern-web\.next\dev\server\edge\chunks\node_modules_@supabase_auth-js_dist_module_0focj3n._.js:600:23
+[22:14:55]     at _handleRequest (C:\Users\Ellio\Documents\GitHub\kern-web\.next\dev\server\edge\chunks\node_modules_@supabase_auth-js_dist_module_0focj3n._.js:989:24)
+[22:14:55]     at _request (C:\Users\Ellio\Documents\GitHub\kern-web\.next\dev\server\edge\chunks\node_modules_@supabase_auth-js_dist_module_0focj3n._.js:976:24)
+[22:14:55]     at C:\Users\Ellio\Documents\GitHub\kern-web\.next\dev\server\edge\chunks\node_modules_@supabase_auth-js_dist_module_0focj3n._.js:7789:225
+[22:14:55]     at async C:\Users\Ellio\Documents\GitHub\kern-web\.next\dev\server\edge\chunks\node_modules_@supabase_auth-js_dist_module_0focj3n._.js:675:36 {
+[22:14:55]   
+[22:14:55] }
+[22:14:55] Error: fetch failed
+[22:14:55]     at context.fetch (C:\Users\Ellio\Documents\GitHub\kern-web\node_modules\next\dist\server\web\sandbox\context.js:321:60)
+[22:14:55]     at C:\Users\Ellio\Documents\GitHub\kern-web\.next\dev\server\edge\chunks\node_modules_@supabase_auth-js_dist_module_0focj3n._.js:600:23
+[22:14:55]     at _handleRequest (C:\Users\Ellio\Documents\GitHub\kern-web\.next\dev\server\edge\chunks\node_modules_@supabase_auth-js_dist_module_0focj3n._.js:989:24)
+[22:14:55]     at _request (C:\Users\Ellio\Documents\GitHub\kern-web\.next\dev\server\edge\chunks\node_modules_@supabase_auth-js_dist_module_0focj3n._.js:976:24)
+[22:14:55]     at C:\Users\Ellio\Documents\GitHub\kern-web\.next\dev\server\edge\chunks\node_modules_@supabase_auth-js_dist_module_0focj3n._.js:7789:225
+[22:14:55]     at async C:\Users\Ellio\Documents\GitHub\kern-web\.next\dev\server\edge\chunks\node_modules_@supabase_auth-js_dist_module_0focj3n._.js:675:36 {
+[22:14:55]   
+[22:14:55] }
+[22:14:56] Error: fetch failed
+[22:14:56]     at context.fetch (C:\Users\Ellio\Documents\GitHub\kern-web\node_modules\next\dist\server\web\sandbox\context.js:321:60)
+[22:14:56]     at C:\Users\Ellio\Documents\GitHub\kern-web\.next\dev\server\edge\chunks\node_modules_@supabase_auth-js_dist_module_0focj3n._.js:600:23
+[22:14:56]     at _handleRequest (C:\Users\Ellio\Documents\GitHub\kern-web\.next\dev\server\edge\chunks\node_modules_@supabase_auth-js_dist_module_0focj3n._.js:989:24)
+[22:14:56]     at _request (C:\Users\Ellio\Documents\GitHub\kern-web\.next\dev\server\edge\chunks\node_modules_@supabase_auth-js_dist_module_0focj3n._.js:976:24)
+[22:14:56]     at C:\Users\Ellio\Documents\GitHub\kern-web\.next\dev\server\edge\chunks\node_modules_@supabase_auth-js_dist_module_0focj3n._.js:7789:225
+[22:14:56]     at async C:\Users\Ellio\Documents\GitHub\kern-web\.next\dev\server\edge\chunks\node_modules_@supabase_auth-js_dist_module_0focj3n._.js:675:36 {
+[22:14:56]   
+[22:14:56] }
+[22:14:57] SUCCESS: The process "node.exe" with PID 7584 has been terminated.
+[22:14:57] SUCCESS: The process "node.exe" with PID 53076 has been terminated.
+[22:14:57] error: script "dev" exited with code 1
+[22:23:05] ERROR: The process "node.exe" not found.
+[22:23:07] $ next dev
+[22:23:07] ▲ Next.js 16.2.10 (Turbopack)
+[22:23:07] - Local:         http://localhost:3000
+[22:23:07] - Network:       http://192.168.10.191:3000
+[22:23:07] - Environments: .env
+[22:23:07] ✓ Ready in 482ms
+[22:23:08] 
+[22:23:08] ⚠️  Node.js 20 and below are deprecated and will no longer be supported in future versions of @supabase/supabase-js. Please upgrade to Node.js 22 or later. For more information, visit: https://github.com/orgs/supabase/discussions/45715
+[22:23:08] TypeError: fetch failed
+[22:23:08]     at ignore-listed frames {
+[22:23:08]   [cause]: Error: getaddrinfo ENOTFOUND tpatmwvketmvgacpegyr.supabase.co
+[22:23:08]       at ignore-listed frames {
+[22:23:08]     errno: -3008,
+[22:23:08]     code: 'ENOTFOUND',
+[22:23:08]     syscall: 'getaddrinfo',
+[22:23:08]     hostname: 'tpatmwvketmvgacpegyr.supabase.co'
+[22:23:08]   }
+[22:23:08] }
+[22:23:09] TypeError: fetch failed
+[22:23:09]     at ignore-listed frames {
+[22:23:09]   [cause]: Error: getaddrinfo ENOTFOUND tpatmwvketmvgacpegyr.supabase.co
+[22:23:09]       at ignore-listed frames {
+[22:23:09]     errno: -3008,
+[22:23:09]     code: 'ENOTFOUND',
+[22:23:09]     syscall: 'getaddrinfo',
+[22:23:09]     hostname: 'tpatmwvketmvgacpegyr.supabase.co'
+[22:23:09]   }
+[22:23:09] }
+[22:23:09] TypeError: fetch failed
+[22:23:09]     at ignore-listed frames {
+[22:23:09]   [cause]: Error: getaddrinfo ENOTFOUND tpatmwvketmvgacpegyr.supabase.co
+[22:23:09]       at ignore-listed frames {
+[22:23:09]     errno: -3008,
+[22:23:09]     code: 'ENOTFOUND',
+[22:23:09]     syscall: 'getaddrinfo',
+[22:23:09]     hostname: 'tpatmwvketmvgacpegyr.supabase.co'
+[22:23:09]   }
+[22:23:09] }
+[22:23:10] TypeError: fetch failed
+[22:23:10]     at ignore-listed frames {
+[22:23:10]   [cause]: Error: getaddrinfo ENOTFOUND tpatmwvketmvgacpegyr.supabase.co
+[22:23:10]       at ignore-listed frames {
+[22:23:10]     errno: -3008,
+[22:23:10]     code: 'ENOTFOUND',
+[22:23:10]     syscall: 'getaddrinfo',
+[22:23:10]     hostname: 'tpatmwvketmvgacpegyr.supabase.co'
+[22:23:10]   }
+[22:23:10] }
+[22:23:11] SUCCESS: The process "node.exe" with PID 25816 has been terminated.
+[22:23:11] SUCCESS: The process "node.exe" with PID 50512 has been terminated.
+[22:23:11] SUCCESS: The process "node.exe" with PID 52700 has been terminated.
+[22:23:11] error: script "dev" exited with code 1
+[22:25:17] $ next dev
+[22:25:18] ▲ Next.js 16.2.10 (Turbopack)
+[22:25:18] - Local:         http://localhost:3000
+[22:25:18] - Network:       http://192.168.10.191:3000
+[22:25:18] - Environments: .env
+[22:25:18] ✓ Ready in 427ms
+[22:25:18] 
+[22:25:18] ⚠️  Node.js 20 and below are deprecated and will no longer be supported in future versions of @supabase/supabase-js. Please upgrade to Node.js 22 or later. For more information, visit: https://github.com/orgs/supabase/discussions/45715
+[22:25:19] TypeError: fetch failed
+[22:25:19]     at ignore-listed frames {
+[22:25:19]   [cause]: Error: getaddrinfo ENOTFOUND tpatmwvketmvgacpegyr.supabase.co
+[22:25:19]       at ignore-listed frames {
+[22:25:19]     errno: -3008,
+[22:25:19]     code: 'ENOTFOUND',
+[22:25:19]     syscall: 'getaddrinfo',
+[22:25:19]     hostname: 'tpatmwvketmvgacpegyr.supabase.co'
+[22:25:19]   }
+[22:25:19] }
+[22:25:19] TypeError: fetch failed
+[22:25:19]     at ignore-listed frames {
+[22:25:19]   [cause]: Error: getaddrinfo ENOTFOUND tpatmwvketmvgacpegyr.supabase.co
+[22:25:19]       at ignore-listed frames {
+[22:25:19]     errno: -3008,
+[22:25:19]     code: 'ENOTFOUND',
+[22:25:19]     syscall: 'getaddrinfo',
+[22:25:19]     hostname: 'tpatmwvketmvgacpegyr.supabase.co'
+[22:25:19]   }
+[22:25:19] }
+[22:25:19] TypeError: fetch failed
+[22:25:19]     at ignore-listed frames {
+[22:25:19]   [cause]: Error: getaddrinfo ENOTFOUND tpatmwvketmvgacpegyr.supabase.co
+[22:25:19]       at ignore-listed frames {
+[22:25:19]     errno: -3008,
+[22:25:19]     code: 'ENOTFOUND',
+[22:25:19]     syscall: 'getaddrinfo',
+[22:25:19]     hostname: 'tpatmwvketmvgacpegyr.supabase.co'
+[22:25:19]   }
+[22:25:19] }
+[22:25:20] TypeError: fetch failed
+[22:25:20]     at ignore-listed frames {
+[22:25:20]   [cause]: Error: getaddrinfo ENOTFOUND tpatmwvketmvgacpegyr.supabase.co
+[22:25:20]       at ignore-listed frames {
+[22:25:20]     errno: -3008,
+[22:25:20]     code: 'ENOTFOUND',
+[22:25:20]     syscall: 'getaddrinfo',
+[22:25:20]     hostname: 'tpatmwvketmvgacpegyr.supabase.co'
+[22:25:20]   }
+[22:25:20] }
+[22:25:20] TypeError: fetch failed
+[22:25:20]     at ignore-listed frames {
+[22:25:20]   [cause]: Error: getaddrinfo ENOTFOUND tpatmwvketmvgacpegyr.supabase.co
+[22:25:20]       at ignore-listed frames {
+[22:25:20]     errno: -3008,
+[22:25:20]     code: 'ENOTFOUND',
+[22:25:20]     syscall: 'getaddrinfo',
+[22:25:20]     hostname: 'tpatmwvketmvgacpegyr.supabase.co'
+[22:25:20]   }
+[22:25:20] }
+[22:25:21] TypeError: fetch failed
+[22:25:21]     at ignore-listed frames {
+[22:25:21]   [cause]: Error: getaddrinfo ENOTFOUND tpatmwvketmvgacpegyr.supabase.co
+[22:25:21]       at ignore-listed frames {
+[22:25:21]     errno: -3008,
+[22:25:21]     code: 'ENOTFOUND',
+[22:25:21]     syscall: 'getaddrinfo',
+[22:25:21]     hostname: 'tpatmwvketmvgacpegyr.supabase.co'
+[22:25:21]   }
+[22:25:21] }
+[22:25:21] TypeError: fetch failed
+[22:25:21]     at ignore-listed frames {
+[22:25:21]   [cause]: Error: getaddrinfo ENOTFOUND tpatmwvketmvgacpegyr.supabase.co
+[22:25:21]       at ignore-listed frames {
+[22:25:21]     errno: -3008,
+[22:25:21]     code: 'ENOTFOUND',
+[22:25:21]     syscall: 'getaddrinfo',
+[22:25:21]     hostname: 'tpatmwvketmvgacpegyr.supabase.co'
+[22:25:21]   }
+[22:25:21] }
+[22:25:22] TypeError: fetch failed
+[22:25:22]     at ignore-listed frames {
+[22:25:22]   [cause]: Error: getaddrinfo ENOTFOUND tpatmwvketmvgacpegyr.supabase.co
+[22:25:22]       at ignore-listed frames {
+[22:25:22]     errno: -3008,
+[22:25:22]     code: 'ENOTFOUND',
+[22:25:22]     syscall: 'getaddrinfo',
+[22:25:22]     hostname: 'tpatmwvketmvgacpegyr.supabase.co'
+[22:25:22]   }
+[22:25:22] }
+[22:25:22] TypeError: fetch failed
+[22:25:22]     at ignore-listed frames {
+[22:25:22]   [cause]: Error: getaddrinfo ENOTFOUND tpatmwvketmvgacpegyr.supabase.co
+[22:25:22]       at ignore-listed frames {
+[22:25:22]     errno: -3008,
+[22:25:22]     code: 'ENOTFOUND',
+[22:25:22]     syscall: 'getaddrinfo',
+[22:25:22]     hostname: 'tpatmwvketmvgacpegyr.supabase.co'
+[22:25:22]   }
+[22:25:22] }
+[22:25:23] TypeError: fetch failed
+[22:25:23]     at ignore-listed frames {
+[22:25:23]   [cause]: Error: getaddrinfo ENOTFOUND tpatmwvketmvgacpegyr.supabase.co
+[22:25:23]       at ignore-listed frames {
+[22:25:23]     errno: -3008,
+[22:25:23]     code: 'ENOTFOUND',
+[22:25:23]     syscall: 'getaddrinfo',
+[22:25:23]     hostname: 'tpatmwvketmvgacpegyr.supabase.co'
+[22:25:23]   }
+[22:25:23] }
+[22:25:25] TypeError: fetch failed
+[22:25:25]     at ignore-listed frames {
+[22:25:25]   [cause]: Error: getaddrinfo ENOTFOUND tpatmwvketmvgacpegyr.supabase.co
+[22:25:25]       at ignore-listed frames {
+[22:25:25]     errno: -3008,
+[22:25:25]     code: 'ENOTFOUND',
+[22:25:25]     syscall: 'getaddrinfo',
+[22:25:25]     hostname: 'tpatmwvketmvgacpegyr.supabase.co'
+[22:25:25]   }
+[22:25:25] }
+[22:25:27] TypeError: fetch failed
+[22:25:27]     at ignore-listed frames {
+[22:25:27]   [cause]: Error: getaddrinfo ENOTFOUND tpatmwvketmvgacpegyr.supabase.co
+[22:25:27]       at ignore-listed frames {
+[22:25:27]     errno: -3008,
+[22:25:27]     code: 'ENOTFOUND',
+[22:25:27]     syscall: 'getaddrinfo',
+[22:25:27]     hostname: 'tpatmwvketmvgacpegyr.supabase.co'
+[22:25:27]   }
+[22:25:27] }
+[22:25:31] TypeError: fetch failed
+[22:25:31]     at ignore-listed frames {
+[22:25:31]   [cause]: Error: getaddrinfo ENOTFOUND tpatmwvketmvgacpegyr.supabase.co
+[22:25:31]       at ignore-listed frames {
+[22:25:31]     errno: -3008,
+[22:25:31]     code: 'ENOTFOUND',
+[22:25:31]     syscall: 'getaddrinfo',
+[22:25:31]     hostname: 'tpatmwvketmvgacpegyr.supabase.co'
+[22:25:31]   }
+[22:25:31] }
+[22:25:33] TypeError: fetch failed
+[22:25:33]     at ignore-listed frames {
+[22:25:33]   [cause]: Error: getaddrinfo ENOTFOUND tpatmwvketmvgacpegyr.supabase.co
+[22:25:33]       at ignore-listed frames {
+[22:25:33]     errno: -3008,
+[22:25:33]     code: 'ENOTFOUND',
+[22:25:33]     syscall: 'getaddrinfo',
+[22:25:33]     hostname: 'tpatmwvketmvgacpegyr.supabase.co'
+[22:25:33]   }
+[22:25:33] }
+[22:25:44] TypeError: fetch failed
+[22:25:44]     at ignore-listed frames {
+[22:25:44]   [cause]: Error: getaddrinfo ENOTFOUND tpatmwvketmvgacpegyr.supabase.co
+[22:25:44]       at ignore-listed frames {
+[22:25:44]     errno: -3008,
+[22:25:44]     code: 'ENOTFOUND',
+[22:25:44]     syscall: 'getaddrinfo',
+[22:25:44]     hostname: 'tpatmwvketmvgacpegyr.supabase.co'
+[22:25:44]   }
+[22:25:44] }
+[22:25:44] Error [AuthRetryableFetchError]: fetch failed
+[22:25:44]     at ignore-listed frames {
+[22:25:44]   __isAuthError: true,
+[22:25:44]   status: 0,
+[22:25:44]   code: undefined
+[22:25:44] }
+[22:25:44] Error [AuthRetryableFetchError]: fetch failed
+[22:25:44]     at ignore-listed frames {
+[22:25:44]   __isAuthError: true,
+[22:25:44]   status: 0,
+[22:25:44]   code: undefined
+[22:25:44] }
+[22:25:44] ⚠️  Node.js 20 and below are deprecated and will no longer be supported in future versions of @supabase/supabase-js. Please upgrade to Node.js 22 or later. For more information, visit: https://github.com/orgs/supabase/discussions/45715
+[22:25:46]  GET / 200 in 27.4s (next.js: 104ms, proxy.ts: 25.9s, application-code: 1420ms)
+[22:25:46] TypeError: fetch failed
+[22:25:46]     at ignore-listed frames {
+[22:25:46]   [cause]: Error: getaddrinfo ENOTFOUND tpatmwvketmvgacpegyr.supabase.co
+[22:25:46]       at ignore-listed frames {
+[22:25:46]     errno: -3008,
+[22:25:46]     code: 'ENOTFOUND',
+[22:25:46]     syscall: 'getaddrinfo',
+[22:25:46]     hostname: 'tpatmwvketmvgacpegyr.supabase.co'
+[22:25:46]   }
+[22:25:46] }
+[22:25:46] Error [AuthRetryableFetchError]: fetch failed
+[22:25:46]     at ignore-listed frames {
+[22:25:46]   __isAuthError: true,
+[22:25:46]   status: 0,
+[22:25:46]   code: undefined
+[22:25:46] }
+[22:25:46] Error [AuthRetryableFetchError]: fetch failed
+[22:25:46]     at ignore-listed frames {
+[22:25:46]   __isAuthError: true,
+[22:25:46]   status: 0,
+[22:25:46]   code: undefined
+[22:25:46] }
+[22:25:47]  GET / 200 in 26.2s (next.js: 19ms, proxy.ts: 25.6s, application-code: 611ms)
+[22:25:48] TypeError: fetch failed
+[22:25:48]     at ignore-listed frames {
+[22:25:48]   [cause]: Error: getaddrinfo ENOTFOUND tpatmwvketmvgacpegyr.supabase.co
+[22:25:48]       at ignore-listed frames {
+[22:25:48]     errno: -3008,
+[22:25:48]     code: 'ENOTFOUND',
+[22:25:48]     syscall: 'getaddrinfo',
+[22:25:48]     hostname: 'tpatmwvketmvgacpegyr.supabase.co'
+[22:25:48]   }
+[22:25:48] }
+[22:25:49] TypeError: fetch failed
+[22:25:49]     at ignore-listed frames {
+[22:25:49]   [cause]: Error: getaddrinfo ENOTFOUND tpatmwvketmvgacpegyr.supabase.co
+[22:25:49]       at ignore-listed frames {
+[22:25:49]     errno: -3008,
+[22:25:49]     code: 'ENOTFOUND',
+[22:25:49]     syscall: 'getaddrinfo',
+[22:25:49]     hostname: 'tpatmwvketmvgacpegyr.supabase.co'
+[22:25:49]   }
+[22:25:49] }
+[22:25:49] TypeError: fetch failed
+[22:25:49]     at ignore-listed frames {
+[22:25:49]   [cause]: Error: getaddrinfo ENOTFOUND tpatmwvketmvgacpegyr.supabase.co
+[22:25:49]       at ignore-listed frames {
+[22:25:49]     errno: -3008,
+[22:25:49]     code: 'ENOTFOUND',
+[22:25:49]     syscall: 'getaddrinfo',
+[22:25:49]     hostname: 'tpatmwvketmvgacpegyr.supabase.co'
+[22:25:49]   }
+[22:25:49] }
+[22:25:50] [browser] TypeError: Failed to fetch
+[22:25:50]     at new Promise (<anonymous>)
+[22:25:50] [browser] Uncaught Error: Hydration failed because the server rendered text didn't match the client. As a result this tree will be regenerated on the client. This can happen if a SSR-ed Client Component used:
+[22:25:50] 
+[22:25:50] - A server/client branch `if (typeof window !== 'undefined')`.
+[22:25:50] - Variable input such as `Date.now()` or `Math.random()` which changes each time it's called.
+[22:25:50] - Date formatting in a user's locale which doesn't match the server.
+[22:25:50] - External changing data without sending a snapshot of it along with the HTML.
+[22:25:50] - Invalid HTML tag nesting.
+[22:25:50] 
+[22:25:50] It can also happen if the client has a browser extension installed which messes with the HTML before React loaded.
+[22:25:50] 
+[22:25:50] https://react.dev/link/hydration-mismatch
+[22:25:50] 
+[22:25:50]   ...
+[22:25:50]     <SegmentViewNode type="page" pagePath="page.tsx">
+[22:25:50]       <SegmentTrieNode>
+[22:25:50]       <Home>
+[22:25:50]         <Hero>
+[22:25:50]         <ScanDivider>
+[22:25:50]         <section>
+[22:25:50]         <ScanDivider>
+[22:25:50]         <TerminalMock>
+[22:25:50]           <section id="features" className="mx-auto ma...">
+[22:25:50]             <Reveal>
+[22:25:50]             <Reveal delay={0.1}>
+[22:25:50]               <motion.div className="" initial={{opacity:0,y:12}} whileInView={{opacity:1,y:0}} ...>
+[22:25:50]                 <div className="" style={{opacity:0, ...}} ref={function useMotionRef.useCallback}>
+[22:25:50]                   <div className="overflow-h..." style={{...}}>
+[22:25:50]                     <div>
+[22:25:50]                     <div className="h-72 overf..." role="log" aria-live="polite" onClick={function onClick}>
+[22:25:50]                       <div className="flex gap-3">
+[22:25:50]                         <span className="shrink-0 t...">
+[22:25:50] +                         00:25:49
+[22:25:50] -                         00:25:47
+[22:25:50]                           ...
+[22:25:50]                         ...
+[22:25:50]                       ...
+[22:25:50]                       ...
+[22:25:50]                     ...
+[22:25:50]         ...
+[22:25:50]     ...
+[22:25:50] 
+[22:25:50]     at <unknown> (https://react.dev/link/hydration-mismatch)
+[22:25:50]     at <unknown> (+                         00:25:49)
+[22:25:50]     at <unknown> (-                         00:25:47)
+[22:25:50]     at span (<anonymous>)
+[22:25:50]     at <unknown> (components/landing/TerminalMock.tsx:296:17)
+[22:25:50]     at Array.map (<anonymous>)
+[22:25:50]     at TerminalMock (components/landing/TerminalMock.tsx:294:19)
+[22:25:50]     at Home (app\page.tsx:29:7)
+[22:25:50]   294 |             {logs.map((l, i) => (
+[22:25:50]   295 |               <div key={i} className="flex gap-3">
+[22:25:50] > 296 |                 <span className="shrink-0 text-signal-low/70">[{l.ts}]</span>
+[22:25:50]       |                 ^
+[22:25:50]   297 |                 <span className={TONE_CLASS[l.tone]}>{l.text}</span>
+[22:25:50]   298 |               </div>
+[22:25:50]   299 |             ))}
+[22:25:50] [browser] TypeError: Failed to fetch
+[22:25:50] TypeError: fetch failed
+[22:25:50]     at ignore-listed frames {
+[22:25:50]   [cause]: Error: getaddrinfo ENOTFOUND tpatmwvketmvgacpegyr.supabase.co
+[22:25:50]       at ignore-listed frames {
+[22:25:50]     errno: -3008,
+[22:25:50]     code: 'ENOTFOUND',
+[22:25:50]     syscall: 'getaddrinfo',
+[22:25:50]     hostname: 'tpatmwvketmvgacpegyr.supabase.co'
+[22:25:50]   }
+[22:25:50] }
+[22:25:50] [browser] TypeError: Failed to fetch
+[22:25:51] [browser] TypeError: Failed to fetch
+[22:25:52] TypeError: fetch failed
+[22:25:52]     at ignore-listed frames {
+[22:25:52]   [cause]: Error: getaddrinfo ENOTFOUND tpatmwvketmvgacpegyr.supabase.co
+[22:25:52]       at ignore-listed frames {
+[22:25:52]     errno: -3008,
+[22:25:52]     code: 'ENOTFOUND',
+[22:25:52]     syscall: 'getaddrinfo',
+[22:25:52]     hostname: 'tpatmwvketmvgacpegyr.supabase.co'
+[22:25:52]   }
+[22:25:52] }
+[22:25:53] [browser] TypeError: Failed to fetch
+[22:25:55] TypeError: fetch failed
+[22:25:55]     at ignore-listed frames {
+[22:25:55]   [cause]: Error: getaddrinfo ENOTFOUND tpatmwvketmvgacpegyr.supabase.co
+[22:25:55]       at ignore-listed frames {
+[22:25:55]     errno: -3008,
+[22:25:55]     code: 'ENOTFOUND',
+[22:25:55]     syscall: 'getaddrinfo',
+[22:25:55]     hostname: 'tpatmwvketmvgacpegyr.supabase.co'
+[22:25:55]   }
+[22:25:55] }
+[22:25:56] [browser] TypeError: Failed to fetch
+[22:26:01] SUCCESS: The process "node.exe" with PID 13388 has been terminated.
+[22:26:01] SUCCESS: The process "node.exe" with PID 9696 has been terminated.
+[22:26:01] SUCCESS: The process "node.exe" with PID 29992 has been terminated.
+[22:26:01] error: script "dev" exited with code 1

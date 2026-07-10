@@ -3,6 +3,7 @@ import type { Release } from "@/lib/github";
 import { RELEASES_PAGE, formatBytes, getPlatforms } from "@/lib/github";
 import { VersionBadge } from "@/components/download/VersionBadge";
 import { MatrixDivider } from "@/components/ui/MatrixBorder";
+import { Spotlight } from "@/components/ui/Spotlight";
 
 const OS_GLYPH: Record<string, string> = {
   Windows: "⊞",
@@ -36,8 +37,8 @@ export function DownloadSection({ release }: { release: Release | null }) {
       {release ? (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
           {getPlatforms(release).map((p) => (
+            <Spotlight key={p.os}>
             <div
-              key={p.os}
               className="flex flex-col gap-4 bg-bg-surface/60 p-5"
               style={{ boxShadow: "inset 0 0 0 1px rgba(22,25,32,0.9)" }}
             >
@@ -87,6 +88,7 @@ export function DownloadSection({ release }: { release: Release | null }) {
                 </>
               )}
             </div>
+            </Spotlight>
           ))}
         </div>
       ) : (
