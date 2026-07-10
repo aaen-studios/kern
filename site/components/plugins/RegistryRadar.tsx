@@ -27,18 +27,6 @@ const SWEEP_SPEED = 0.4; // radians per second
 const BLIP_MIN_R = 4;
 const BLIP_MAX_R = 12;
 
-// ── Types ─────────────────────────────────────────────────────────
-
-interface RadarBlip {
-  id: string;
-  displayName: string;
-  category: string;
-  installCount: number;
-  ringIndex: number; // 0 = inner, 3 = outer
-  angle: number;
-  size: number;
-}
-
 // ── Helpers ───────────────────────────────────────────────────────
 
 function hashAngle(id: string): number {
@@ -70,9 +58,17 @@ export function RegistryRadar({ plugins }: { plugins: Plugin[] }) {
     plugin: Plugin;
   } | null>(null);
 
+  // "now" captured once on mount (client-only) so the blip memo stays pure.
+  // ring assignment is day-granularity, so a stale-ish timestamp is fine.
+  const [now, setNow] = useState(0);
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => setNow(Date.now()));
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
   // ── Compute blip data (memoized) ─────────────────────────────────
   const blips = useMemo(() => {
-    const now = Date.now();
+    if (!now) return [];
     const DAY_MS = 86400000;
     const maxInstalls = Math.max(...plugins.map((p) => p.install_count), 1);
     const minInstalls = Math.min(...plugins.map((p) => p.install_count), 0);
@@ -97,7 +93,7 @@ export function RegistryRadar({ plugins }: { plugins: Plugin[] }) {
         size: scaleSize(p.install_count, minInstalls, maxInstalls),
       };
     });
-  }, [plugins]);
+  }, [plugins, now]);
 
   // keep the latest blips available to the draw loop without restarting it.
   // mirrored in an effect (not during render) per the React refs rule.

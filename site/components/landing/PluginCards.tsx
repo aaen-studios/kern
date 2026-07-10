@@ -23,7 +23,7 @@ const BOT_RUNTIMES = ["node", "bun", "deno", "rust"];
 
 export function PluginCards() {
   return (
-    <section id="plugins-preview" className="border-y border-grid-bounds/40 bg-bg-surface/30">
+    <section id="plugins-preview" className="bg-bg-surface/30">
       <div className="mx-auto max-w-[1080px] px-4 py-24 sm:px-6">
         <Reveal>
           <SectionHeading kicker="plugins" title="teach it new server types.">

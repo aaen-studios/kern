@@ -6,7 +6,7 @@ import { RadarMark } from "@/components/brand/RadarMark";
 */
 export function SignalRadarStrip() {
   return (
-    <section className="border-y border-grid-bounds/40 bg-bg-surface/30">
+    <section className="bg-bg-surface/30">
       <div className="mx-auto flex max-w-[1080px] flex-col items-start gap-6 px-4 py-16 sm:flex-row sm:items-center sm:px-6">
         <RadarMark size="lg" className="shrink-0" />
         <div className="max-w-2xl">

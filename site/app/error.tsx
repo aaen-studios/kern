@@ -4,7 +4,7 @@
 // kern voice: "signal lost". rendered as an in-world fault: crimson badge,
 // blinking status dots, a one-frame glitch on the headline, and the fault
 // sound voice (silenced under reduced-motion / when ambience is off).
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { RadarMark } from "@/components/brand/RadarMark";
@@ -19,11 +19,16 @@ export default function Error({
   unstable_retry: () => void;
 }) {
   const { play } = useSound();
-
+  // fire the fault voice once per error occurrence, not on every `play`
+  // identity change (e.g. when the user toggles ambience while on this page)
+  const playRef = useRef(play);
+  useEffect(() => {
+    playRef.current = play;
+  });
   useEffect(() => {
     console.error(error);
-    play("fault");
-  }, [error, play]);
+    playRef.current("fault");
+  }, [error]);
 
   return (
     <main className="flex min-h-[70vh] flex-col items-center justify-center px-4 text-center">

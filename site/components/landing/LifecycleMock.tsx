@@ -34,7 +34,7 @@ function LifeButton({
 
 export function LifecycleMock() {
   return (
-    <section className="border-y border-grid-bounds/40 bg-bg-surface/30 mx-auto w-full px-4 py-24 sm:px-6 flex justify-center items-center">
+    <section className="bg-bg-surface/30 mx-auto w-full px-4 py-24 sm:px-6 flex justify-center items-center">
       <div className="max-w-[1080px]">
         <Reveal>
           <SectionHeading kicker="lifecycle" title="start. stop. restart. gracefully.">
