@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { useReducedMotion } from "motion/react";
+import { useReducedMotion } from "@/hooks/useReducedMotion";
 import { SoundContext, type SoundVoice } from "@/hooks/useSound";
 
 /*

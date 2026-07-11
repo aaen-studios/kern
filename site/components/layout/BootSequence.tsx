@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useReducedMotion } from "motion/react";
+import { useReducedMotion } from "@/hooks/useReducedMotion";
 
 /*
   One-time power-on overlay. Renders once per browser session (gated by

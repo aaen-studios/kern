@@ -24,14 +24,17 @@ export function InstallButton({
 
   useEffect(() => {
     // Build the deep link URL after mount so server and client render match.
-    const ver = latestVersion(plugin);
-    const base = window.location.origin;
-    const downloadUrl = ver.download_url.startsWith("http")
-      ? ver.download_url
-      : `${base}${ver.download_url}`;
-    setHref(
-      `kern://install?url=${encodeURIComponent(downloadUrl)}&id=${plugin.id}&v=${ver.version}`,
-    );
+    const raf = requestAnimationFrame(() => {
+      const ver = latestVersion(plugin);
+      const base = window.location.origin;
+      const downloadUrl = ver.download_url.startsWith("http")
+        ? ver.download_url
+        : `${base}${ver.download_url}`;
+      setHref(
+        `kern://install?url=${encodeURIComponent(downloadUrl)}&id=${plugin.id}&v=${ver.version}`,
+      );
+    });
+    return () => cancelAnimationFrame(raf);
   }, [plugin]);
 
   useEffect(() => () => {
@@ -53,6 +56,18 @@ export function InstallButton({
     size === "lg"
       ? "px-5 py-2.5 text-sm"
       : "px-4 py-2 text-xs";
+
+  // Before hydration, href is empty. Render a disabled placeholder instead of
+  // an <a href=""> which would navigate to the current page if clicked early.
+  if (!href) {
+    return (
+      <span
+        className={`inline-flex items-center justify-center gap-2 bg-signal-high/50 ${cls} font-mono lowercase text-bg-core/50 cursor-not-allowed`}
+      >
+        install in kern
+      </span>
+    );
+  }
 
   if (fellBack) {
     return (

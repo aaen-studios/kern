@@ -45,3 +45,4 @@ NUL.*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+.zcode/*

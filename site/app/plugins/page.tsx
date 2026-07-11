@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { Suspense } from "react";
 import { getPlugins } from "@/lib/registry";
 import { PluginBrowser } from "@/components/plugins/PluginBrowser";
@@ -51,12 +52,12 @@ export default async function PluginsPage({
           >
             {isRadar ? "◉ grid view" : "⊞ radar view"}
           </a>
-          <a
+          <Link
             href="/plugins/submit"
             className="font-mono text-[11px] lowercase text-signal-high transition hover:brightness-125"
           >
             submit a plugin ↗
-          </a>
+          </Link>
         </div>
       </div>
 

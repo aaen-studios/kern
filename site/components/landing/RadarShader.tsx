@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useRef } from "react";
-import { useReducedMotion } from "motion/react";
+import { useEffect, useRef, useState } from "react";
+import { useReducedMotion } from "@/hooks/useReducedMotion";
 import { useRafLoop } from "@/hooks/useRafLoop";
 import { setupCanvasDPR } from "@/lib/canvas";
 
@@ -41,6 +41,19 @@ function buildRings(maxR: number): Ring[] {
 export function RadarShader({ className = "" }: { className?: string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const reduce = useReducedMotion();
+  const [inViewport, setInViewport] = useState(true);
+
+  // pause the shader when the hero scrolls out of view
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      ([entry]) => setInViewport(entry.isIntersecting),
+      { rootMargin: "0px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
 
   // geometry + ctx live in refs so the draw callback (stable across frames)
   // can read them without restarting the rAF loop.
@@ -162,7 +175,7 @@ export function RadarShader({ className = "" }: { className?: string }) {
       ctx.arc(cx, cy, Math.max(5, maxR * 0.1), 0, Math.PI * 2);
       ctx.stroke();
     },
-    { enabled: !reduce },
+    { enabled: !reduce && inViewport },
   );
 
   return (

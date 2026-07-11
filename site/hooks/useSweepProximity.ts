@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useReducedMotion } from "motion/react";
+import { useReducedMotion } from "@/hooks/useReducedMotion";
 
 const DEFAULT_THRESHOLD = 0.15; // radians — matches Hero's original constant
 

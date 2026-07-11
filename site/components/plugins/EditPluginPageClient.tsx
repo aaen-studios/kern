@@ -53,7 +53,10 @@ export function EditPluginPageClient({
 
   // Sync versions when plugin prop changes (after publish via router.refresh)
   useEffect(() => {
-    setVersions(initialPlugin.versions);
+    const raf = requestAnimationFrame(() => {
+      setVersions(initialPlugin.versions);
+    });
+    return () => cancelAnimationFrame(raf);
   }, [initialPlugin.versions]);
 
   // Mark dirty when any field changes

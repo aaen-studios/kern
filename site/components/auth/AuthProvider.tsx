@@ -23,17 +23,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const supabase = createClient();
+    let authStateFired = false;
 
-    // Get initial session
+    // Get initial session. If onAuthStateChange fires before this resolves,
+    // the listener has the most recent state, so we skip the stale response.
     supabase.auth.getUser().then(({ data: { user } }) => {
-      setUser(user);
-      setLoading(false);
+      if (!authStateFired) {
+        setUser(user);
+        setLoading(false);
+      }
     });
 
-    // Listen for auth changes
+    // Listen for auth changes — mark authStateFired so getUser() is ignored
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
+      authStateFired = true;
       setUser(session?.user ?? null);
       setLoading(false);
     });

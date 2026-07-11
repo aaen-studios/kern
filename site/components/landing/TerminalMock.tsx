@@ -1,9 +1,16 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect } from "react";
+import {
+  useState,
+  useRef,
+  useCallback,
+  useEffect,
+  useReducer,
+  memo,
+} from "react";
 import { StatusDots } from "@/components/ui/StatusDots";
 import { SectionHeading, Reveal } from "@/components/ui/Reveal";
-import { useReducedMotion } from "motion/react";
+import { useReducedMotion } from "@/hooks/useReducedMotion";
 import { useSound } from "@/hooks/useSound";
 
 /*
@@ -25,13 +32,6 @@ const SERVERS = [
 
 type ServerState = "offline" | "starting" | "running" | "stopping";
 
-const STATUS_DOT: Record<ServerState, "idle" | "breathe" | "wave" | "blink"> = {
-  offline: "idle",
-  starting: "breathe",
-  running: "wave",
-  stopping: "blink",
-};
-
 type LogEntry = {
   ts: string;
   text: string;
@@ -46,6 +46,23 @@ const TONE_CLASS: Record<LogEntry["tone"], string> = {
   dim: "text-signal-low",
 };
 
+/*
+  useReducer for logs — batching many lines at once avoids cascading renders
+  that a useState setter would trigger on each delayedAppend resolution.
+*/
+type LogAction =
+  | { type: "append"; lines: LogEntry[] }
+  | { type: "clear" };
+
+function logReducer(state: LogEntry[], action: LogAction): LogEntry[] {
+  switch (action.type) {
+    case "append":
+      return state.concat(action.lines);
+    case "clear":
+      return [];
+  }
+}
+
 function now() {
   const d = new Date();
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
@@ -55,18 +72,39 @@ function logLine(text: string, tone: LogEntry["tone"] = "info"): LogEntry {
   return { ts: now(), text, tone };
 }
 
+/*
+  Memoised single log line — prevents re-rendering the entire terminal output
+  when only new lines are appended.
+*/
+const LogLine = memo(function LogLine({ entry }: { entry: LogEntry }) {
+  return (
+    <div className="flex gap-3">
+      <span className="shrink-0 text-signal-low/70">[{entry.ts}]</span>
+      <span className={TONE_CLASS[entry.tone]}>{entry.text}</span>
+    </div>
+  );
+});
+
 export function TerminalMock() {
   const reduce = useReducedMotion();
   const { play } = useSound();
-  const [logs, setLogs] = useState<LogEntry[]>([
+  const [logs, dispatch] = useReducer(logReducer, [
     logLine("Terminal ready — type a command to begin", "dim"),
     logLine('Try: help, kern list, kern install <name>', "dim"),
   ]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
-  const [serverStates, setServerStates] = useState<Record<string, ServerState>>(
-    () => Object.fromEntries(SERVERS.map((s) => [s.id, "offline"])),
+  /*
+    serverStates lives in a ref so the runCommand callback (which reads it
+    via .current) does not need it in deps. A runningCount state serves as
+    both the re-render trigger and the header-bar value, avoiding a React 19
+    lint warning about reading refs during render.
+  */
+  const serverStatesRef = useRef<Record<string, ServerState>>(
+    Object.fromEntries(SERVERS.map((s) => [s.id, "offline"])),
   );
+  const [runningCount, setRunningCount] = useState(0);
+
   const inputRef = useRef<HTMLInputElement>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -80,7 +118,7 @@ export function TerminalMock() {
   }, [logs]);
 
   const addLogs = useCallback((lines: LogEntry[]) => {
-    setLogs((prev) => [...prev, ...lines]);
+    dispatch({ type: "append", lines });
   }, []);
 
   const appendLog = useCallback(
@@ -108,7 +146,11 @@ export function TerminalMock() {
   );
 
   const updateServer = useCallback((id: string, state: ServerState) => {
-    setServerStates((prev) => ({ ...prev, [id]: state }));
+    const next = { ...serverStatesRef.current, [id]: state };
+    serverStatesRef.current = next;
+    setRunningCount(
+      Object.values(next).filter((s) => s === "running").length,
+    );
   }, []);
 
   const runCommand = useCallback(
@@ -119,6 +161,7 @@ export function TerminalMock() {
       abortRef.current?.abort();
       abortRef.current = null;
 
+      const states = serverStatesRef.current; // stable ref read
       const trimmed = cmd.trim().toLowerCase();
       const parts = trimmed.split(/\s+/);
 
@@ -138,9 +181,9 @@ export function TerminalMock() {
           appendLog(`  ${s.id} (${s.runtime})`, "info");
         });
       } else if (trimmed === "clear") {
-        setLogs([]);
+        dispatch({ type: "clear" });
       } else if (parts[0] === "kern" && parts[1] === "list") {
-        const running = SERVERS.filter((s) => serverStates[s.id] === "running");
+        const running = SERVERS.filter((s) => states[s.id] === "running");
         if (running.length === 0) {
           await delayedAppend("no servers running.", "warn", 150);
         } else {
@@ -168,7 +211,7 @@ export function TerminalMock() {
             150,
           );
         } else if (parts[1] === "install") {
-          if (serverStates[server.id] !== "offline") {
+          if (states[server.id] !== "offline") {
             await delayedAppend(`${server.id} is already installed.`, "warn", 150);
           } else {
             await delayedAppend(`installing ${server.id}…`, "info", 200);
@@ -180,7 +223,7 @@ export function TerminalMock() {
             updateServer(server.id, "offline");
           }
         } else if (parts[1] === "start") {
-          if (serverStates[server.id] === "running") {
+          if (states[server.id] === "running") {
             await delayedAppend(`${server.id} is already running.`, "warn", 150);
           } else {
             await delayedAppend(`starting ${server.id}…`, "info", 200);
@@ -191,7 +234,7 @@ export function TerminalMock() {
             updateServer(server.id, "running");
           }
         } else if (parts[1] === "stop") {
-          if (serverStates[server.id] === "offline") {
+          if (states[server.id] === "offline") {
             await delayedAppend(`${server.id} is not running.`, "warn", 150);
           } else {
             await delayedAppend(`stopping ${server.id}…`, "info", 200);
@@ -209,7 +252,7 @@ export function TerminalMock() {
         // Show all servers and their states
         await delayedAppend("server status:", "dim", 100);
         for (const s of SERVERS) {
-          const state = serverStates[s.id];
+          const state = states[s.id];
           await delayedAppend(
             `  ${s.id} · ${s.runtime} · ${state === "offline" ? "🟢" : "🟢"} ${state}`,
             state === "running" ? "success" : "dim",
@@ -226,7 +269,8 @@ export function TerminalMock() {
 
       setBusy(false);
     },
-    [busy, serverStates, appendLog, delayedAppend, updateServer, reduce],
+    // serverStates removed from deps — the callback reads from the stable ref
+    [busy, appendLog, delayedAppend, updateServer, reduce],
   );
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -238,10 +282,6 @@ export function TerminalMock() {
     setInput("");
   };
 
-  // A running server count for the header bar
-  const runningCount = Object.values(serverStates).filter(
-    (s) => s === "running",
-  ).length;
   const headerStatus =
     runningCount > 0
       ? { dots: "wave" as const, label: `${runningCount} running` }
@@ -292,10 +332,7 @@ export function TerminalMock() {
               <p className="text-signal-low/60 italic">terminal cleared.</p>
             )}
             {logs.map((l, i) => (
-              <div key={i} className="flex gap-3">
-                <span className="shrink-0 text-signal-low/70">[{l.ts}]</span>
-                <span className={TONE_CLASS[l.tone]}>{l.text}</span>
-              </div>
+              <LogLine key={i} entry={l} />
             ))}
             {busy && (
               <div className="mt-1 flex items-center gap-2">

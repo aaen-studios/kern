@@ -294,6 +294,32 @@ body {
   animation-delay: 0.25s;
 }
 
+/* ---- scan-divider sweep (replaces motion-driven ScanDivider) ---- */
+@keyframes scan-sweep {
+  0% { width: 0%; opacity: 0; }
+  15% { opacity: 1; }
+  85% { opacity: 1; }
+  100% { width: 100%; opacity: 0; }
+}
+.scan-divider__sweep {
+  position: absolute;
+  inset: 0;
+  width: 0%;
+  opacity: 0;
+}
+/* Chromium-native scroll-driven animation — no JS needed */
+@supports (animation-timeline: view()) {
+  .scan-divider__sweep {
+    animation: scan-sweep 0.9s ease-in-out forwards;
+    animation-timeline: view();
+    animation-range: entry 0% entry 40%;
+  }
+}
+/* IntersectionObserver fallback for Firefox/Safari + reduced-motion skip */
+.scan-divider__sweep.scan-sweep-animate {
+  animation: scan-sweep 0.9s ease-in-out forwards;
+}
+
 /*
   Accessibility: gate all motion on prefers-reduced-motion.
   Pause/hide shaders + animations; static dot-grids remain.

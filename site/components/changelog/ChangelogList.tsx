@@ -19,6 +19,11 @@ export function ChangelogList({ initial }: { initial: Release[] }) {
   const [done, setDone] = useState(initial.length === 0);
   const sentinelRef = useRef<HTMLDivElement>(null);
 
+  // Guard against concurrent fetches — the IntersectionObserver callback is
+  // async, so multiple entries intersecting before React re-renders could
+  // otherwise fire overlapping getReleasesPage calls with the same page.
+  const fetchingRef = useRef(false);
+
   useEffect(() => {
     if (done) return;
     const el = sentinelRef.current;
@@ -27,17 +32,25 @@ export function ChangelogList({ initial }: { initial: Release[] }) {
     let cancelled = false;
     const observer = new IntersectionObserver(
       async (entries) => {
-        if (!entries[0]?.isIntersecting || loading || done) return;
+        if (!entries[0]?.isIntersecting || done) return;
+        if (fetchingRef.current) return;
+        fetchingRef.current = true;
         setLoading(true);
-        const next = await getReleasesPage(page);
-        if (cancelled) return;
-        if (next.length === 0) {
-          setDone(true);
-        } else {
-          setReleases((prev) => [...prev, ...next]);
-          setPage((p) => p + 1);
+        try {
+          const next = await getReleasesPage(page);
+          if (cancelled) return;
+          if (next.length === 0) {
+            setDone(true);
+          } else {
+            setReleases((prev) => [...prev, ...next]);
+            setPage((p) => p + 1);
+          }
+        } catch {
+          // Network error — user can scroll again to retry
+        } finally {
+          fetchingRef.current = false;
+          if (!cancelled) setLoading(false);
         }
-        setLoading(false);
       },
       { rootMargin: "200px" },
     );

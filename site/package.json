@@ -21,6 +21,7 @@
     "resend": "^6.16.0"
   },
   "devDependencies": {
+    "@next/bundle-analyzer": "^16.2.10",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",

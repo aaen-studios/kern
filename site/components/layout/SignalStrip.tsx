@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useRef } from "react";
-import { useReducedMotion } from "motion/react";
+import { useEffect, useRef, useState } from "react";
+import { useReducedMotion } from "@/hooks/useReducedMotion";
 import { useRafLoop } from "@/hooks/useRafLoop";
 import { setupCanvasDPR } from "@/lib/canvas";
 
@@ -29,8 +29,22 @@ function rgba(c: readonly [number, number, number], a: number) {
 export function SignalStrip() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const reduce = useReducedMotion();
+  // track visibility so we can kill the rAF loop when scrolled past
+  const [inViewport, setInViewport] = useState(true);
   // latest radar-sweep pulse strength, decaying each frame
   const sweepPulseRef = useRef(0);
+
+  // pause rendering when the strip scrolls well out of view
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      ([entry]) => setInViewport(entry.isIntersecting),
+      { rootMargin: "-200px 0px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
 
   useRafLoop(
     (t) => {
@@ -77,7 +91,7 @@ export function SignalStrip() {
         ctx.fillRect(0, 0, width, height);
       }
     },
-    { enabled: !reduce },
+    { enabled: !reduce && inViewport },
   );
 
   // listen for the hero radar sweep to brighten the strip in sync

@@ -2,7 +2,7 @@
 
 import { useRef, useState, useCallback, useMemo, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { useReducedMotion } from "motion/react";
+import { useReducedMotion } from "@/hooks/useReducedMotion";
 import { useRafLoop } from "@/hooks/useRafLoop";
 import { setupCanvasDPR } from "@/lib/canvas";
 import type { Plugin } from "@/lib/registry";

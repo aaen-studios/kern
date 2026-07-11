@@ -21,7 +21,7 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://kern.aaenz.no"),
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || "https://kern.aaenz.no"),
   title: {
     default: "kern - any server. one panel.",
     template: "%s · kern",
