@@ -1,11 +1,12 @@
 /*
   Plugin registry types + accessors. Dual-mode:
-  - LIVE MODE: queries Supabase (when NEXT_PUBLIC_SUPABASE_URL is set)
+  - LIVE MODE: queries Supabase directly (when NEXT_PUBLIC_SUPABASE_URL is set)
   - SEED MODE: reads from seed.json (static fallback, offline builds)
 
   The public types are shared so pages work identically regardless of source.
 */
 import seed from "@/content/plugins/seed.json";
+import { createClient } from "@supabase/supabase-js";
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -86,7 +87,7 @@ export interface PluginQuery {
 
 const seedPlugins = seed.plugins as Plugin[];
 
-// ── Live functions (Supabase) ────────────────────────────────────
+// ── Helpers ──────────────────────────────────────────────────────
 
 /**
  * True when Supabase env vars are configured → use live mode.
@@ -100,21 +101,28 @@ function isLive(): boolean {
 }
 
 /**
- * Fetch plugins from the API (server-side call to our own route).
- * Keeps server components simple: one fetch, fully typed response.
+ * Read-only Supabase client for public queries.
+ * Uses `@supabase/supabase-js` directly (no next/headers dependency)
+ * so this file is safe for client-component imports.
  */
-async function fetchFromApi<T>(path: string): Promise<T | null> {
-  try {
-    const base =
-      process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
-    const res = await fetch(`${base}${path}`, {
-      next: { revalidate: 60 }, // ISR: revalidate every 60s
-    });
-    if (!res.ok) return null;
-    return (await res.json()) as T;
-  } catch {
-    return null;
-  }
+function createReadonlySupabase() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+  );
+}
+
+/**
+ * Flatten a raw Supabase row (with joined profiles + plugin_versions)
+ * into the shape that mapLivePlugin expects.
+ */
+function flattenRow(row: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...row,
+    author_github: (row.profiles as Record<string, unknown> | null)?.github_user ?? null,
+    author_avatar: (row.profiles as Record<string, unknown> | null)?.github_avatar ?? null,
+    profiles: undefined,
+  };
 }
 
 function mapLivePlugin(raw: Record<string, unknown>): Plugin {
@@ -161,21 +169,77 @@ export async function getPlugins(
   query: PluginQuery = {},
 ): Promise<Plugin[]> {
   if (isLive()) {
-    const params = new URLSearchParams();
-    if (query.q) params.set("q", query.q);
-    if (query.category && query.category !== "all")
-      params.set("category", query.category);
-    if (query.tag) params.set("tag", query.tag);
-    if (query.author) params.set("author", query.author);
-    if (query.verified) params.set("verified", "true");
-    if (query.sort) params.set("sort", query.sort);
+    try {
+      const supabase = createReadonlySupabase();
 
-    const qs = params.toString();
-    const data = await fetchFromApi<Record<string, unknown>[]>(
-      `/api/plugins${qs ? `?${qs}` : ""}`,
-    );
-    if (data) return data.map(mapLivePlugin);
-    // fallback to seed on fetch failure
+      let dbQuery = supabase
+        .from("plugins")
+        .select(`
+          *,
+          profiles:author_id (
+            github_user,
+            github_avatar,
+            github_url
+          ),
+          plugin_versions (*)
+        `);
+
+      // Text search on display_name and description
+      if (query.q) {
+        const sanitized = query.q.replace(/[%_]/g, "");
+        dbQuery = dbQuery.or(
+          `display_name.ilike.%${sanitized}%,description.ilike.%${sanitized}%`,
+        );
+      }
+
+      // Category filter
+      if (query.category && query.category !== "all") {
+        dbQuery = dbQuery.eq("category", query.category);
+      }
+
+      // Tag filter
+      if (query.tag) {
+        dbQuery = dbQuery.contains("tags", [query.tag]);
+      }
+
+      // Author filter
+      if (query.author) {
+        dbQuery = dbQuery.eq("profiles.github_user", query.author);
+      }
+
+      // Verified filter — plugins by `ellipog` (the official account)
+      if (query.verified) {
+        dbQuery = dbQuery.eq("profiles.github_user", "ellipog");
+      }
+
+      // Sort
+      switch (query.sort) {
+        case "recent":
+          dbQuery = dbQuery.order("created_at", { ascending: false });
+          break;
+        case "upvotes":
+          dbQuery = dbQuery.order("upvotes", { ascending: false });
+          break;
+        case "popular":
+        default:
+          dbQuery = dbQuery.order("install_count", { ascending: false });
+          break;
+      }
+
+      const { data: plugins, error } = await dbQuery;
+
+      if (!error && plugins) {
+        return (plugins as Record<string, unknown>[]).map((p) =>
+          mapLivePlugin(flattenRow(p)),
+        );
+      }
+
+      console.error("getPlugins: Supabase query failed", error);
+    } catch (err) {
+      console.error("getPlugins: direct query threw", err);
+    }
+
+    // Live fetch failed — fall through to seed
   }
 
   // ── Seed fallback ──────────────────────────────────
@@ -224,11 +288,49 @@ export async function getPlugins(
 
 export async function getPlugin(id: string): Promise<Plugin | null> {
   if (isLive()) {
-    const data = await fetchFromApi<Record<string, unknown>>(
-      `/api/plugins/${encodeURIComponent(id)}`,
-    );
-    if (data) return mapLivePlugin(data);
-    // fallback to seed on fetch failure
+    try {
+      const supabase = createReadonlySupabase();
+
+      // Try slug first, fall back to UUID
+      let { data: plugin } = await supabase
+        .from("plugins")
+        .select(`
+          *,
+          profiles:author_id (
+            github_user,
+            github_avatar,
+            github_url
+          ),
+          plugin_versions (*)
+        `)
+        .eq("slug", id)
+        .single();
+
+      if (!plugin) {
+        const { data: fallback } = await supabase
+          .from("plugins")
+          .select(`
+            *,
+            profiles:author_id (
+              github_user,
+              github_avatar,
+              github_url
+            ),
+            plugin_versions (*)
+          `)
+          .eq("id", id)
+          .single();
+        plugin = fallback ?? null;
+      }
+
+      if (plugin) {
+        return mapLivePlugin(flattenRow(plugin as Record<string, unknown>));
+      }
+    } catch (err) {
+      console.error("getPlugin: direct query threw", err);
+    }
+
+    // Live fetch failed — fall through to seed
   }
 
   return seedPlugins.find((p) => p.id === id) ?? null;
@@ -244,22 +346,40 @@ export async function getPublishers(): Promise<
   { author: string; count: number; official: boolean; avatar?: string }[]
 > {
   if (isLive()) {
-    const all = await getPlugins();
-    const map = new Map<string, { count: number; avatar?: string }>();
-    for (const p of all) {
-      const key = p.author_github ?? p.author;
-      const existing = map.get(key) ?? { count: 0, avatar: p.author_avatar };
-      existing.count++;
-      map.set(key, existing);
+    try {
+      const supabase = createReadonlySupabase();
+      const { data: plugins } = await supabase
+        .from("plugins")
+        .select(`
+          *,
+          profiles:author_id (
+            github_user,
+            github_avatar
+          )
+        `);
+
+      if (plugins) {
+        const map = new Map<string, { count: number; avatar?: string }>();
+        for (const p of plugins as Record<string, unknown>[]) {
+          const profile = p.profiles as Record<string, unknown> | null;
+          const author = (profile?.github_user as string) ?? (p.author as string) ?? "unknown";
+          const existing = map.get(author) ?? { count: 0, avatar: profile?.github_avatar as string | undefined };
+          existing.count++;
+          map.set(author, existing);
+        }
+        return Array.from(map.entries())
+          .map(([author, info]) => ({
+            author,
+            count: info.count,
+            official: author === "ellipog",
+            avatar: info.avatar,
+          }))
+          .sort((a, b) => b.count - a.count);
+      }
+    } catch (err) {
+      console.error("getPublishers: direct query threw", err);
     }
-    return Array.from(map.entries())
-      .map(([author, info]) => ({
-        author,
-        count: info.count,
-        official: author === "ellipog",
-        avatar: info.avatar,
-      }))
-      .sort((a, b) => b.count - a.count);
+    // fall through to seed
   }
 
   const map = new Map<string, number>();
@@ -277,10 +397,14 @@ export async function getPublishers(): Promise<
 
 export async function getAllTags(): Promise<string[]> {
   if (isLive()) {
-    const all = await getPlugins();
-    const set = new Set<string>();
-    for (const p of all) for (const t of p.tags) set.add(t);
-    return Array.from(set).sort();
+    try {
+      const all = await getPlugins();
+      const set = new Set<string>();
+      for (const p of all) for (const t of p.tags) set.add(t);
+      return Array.from(set).sort();
+    } catch {
+      // fall through to seed
+    }
   }
 
   const set = new Set<string>();
@@ -290,8 +414,12 @@ export async function getAllTags(): Promise<string[]> {
 
 export async function getPluginIds(): Promise<string[]> {
   if (isLive()) {
-    const all = await getPlugins();
-    return all.map((p) => p.id);
+    try {
+      const all = await getPlugins();
+      return all.map((p) => p.id);
+    } catch {
+      // fall through to seed
+    }
   }
 
   return seedPlugins.map((p) => p.id);
@@ -299,8 +427,12 @@ export async function getPluginIds(): Promise<string[]> {
 
 export async function getAuthors(): Promise<string[]> {
   if (isLive()) {
-    const pubs = await getPublishers();
-    return pubs.map((p) => p.author);
+    try {
+      const pubs = await getPublishers();
+      return pubs.map((p) => p.author);
+    } catch {
+      // fall through to seed
+    }
   }
 
   return Array.from(new Set(seedPlugins.map((p) => p.author))).sort();
