@@ -228,7 +228,7 @@ export async function getPlugin(id: string): Promise<Plugin | null> {
       `/api/plugins/${encodeURIComponent(id)}`,
     );
     if (data) return mapLivePlugin(data);
-    return null;
+    // fallback to seed on fetch failure
   }
 
   return seedPlugins.find((p) => p.id === id) ?? null;
