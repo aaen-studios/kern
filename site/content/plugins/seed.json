@@ -18,9 +18,9 @@
         { "key": "accept_eula", "label": "Accept EULA", "type": "text", "default": "true" }
       ],
       "versions": [
-        { "version": "1.2.0", "kern_compat": "0.1.0", "download_url": "https://r2.kern.app/plugins/minecraft_java/1.2.0.kern", "size_bytes": 184320, "sha256": "a1b2c3", "changelog": "Adds quilt + neoforge softwares, world backup/restore.", "created_at": 1751500000000 },
-        { "version": "1.1.0", "kern_compat": "0.1.0", "download_url": "https://r2.kern.app/plugins/minecraft_java/1.1.0.kern", "size_bytes": 172032, "changelog": "Setup + Chat tabs, whitelist/ops management.", "created_at": 1750900000000 },
-        { "version": "1.0.0", "kern_compat": "0.1.0", "download_url": "https://r2.kern.app/plugins/minecraft_java/1.0.0.kern", "size_bytes": 161792, "changelog": "Initial release. vanilla, paper, purpur, fabric, forge.", "created_at": 1750300000000 }
+        { "version": "1.2.0", "kern_compat": "0.1.0", "download_url": "/api/download?id=minecraft_java&v=1.2.0", "size_bytes": 184320, "sha256": "a1b2c3", "changelog": "Adds quilt + neoforge softwares, world backup/restore.", "created_at": 1751500000000 },
+        { "version": "1.1.0", "kern_compat": "0.1.0", "download_url": "/api/download?id=minecraft_java&v=1.1.0", "size_bytes": 172032, "changelog": "Setup + Chat tabs, whitelist/ops management.", "created_at": 1750900000000 },
+        { "version": "1.0.0", "kern_compat": "0.1.0", "download_url": "/api/download?id=minecraft_java&v=1.0.0", "size_bytes": 161792, "changelog": "Initial release. vanilla, paper, purpur, fabric, forge.", "created_at": 1750300000000 }
       ],
       "readme_md": "# minecraft java server\n\nthe flagship first-party plugin. teaches kern how to run minecraft java edition servers across **7 server softwares**: vanilla, paper, purpur, fabric, forge, neoforge, quilt.\n\n## what it does\n\n- **auto-downloads** the correct jar or installer for the chosen software + version.\n- accepts the **eula** (scaffolded into `eula.txt`).\n- edits `server.properties` from the config form.\n- manages **whitelist / ops / bans**.\n- **backs up and restores worlds**.\n- registers two tabs in the server detail view: **setup** and **chat**.\n\n## config\n\nthe host renders the config form from `configSchema`. pick a runtime, set the minecraft version, tune jvm args. defaults are sane — paper 1.21, 2g heap.\n\n## lifecycle\n\n`start` runs `java -jar server.jar --nogui`, with runtime-qualified overrides (e.g. `start.forge` runs the forge installer with `useShell`).\n\n> **note** `stop` sends `stop` to stdin and waits up to 15s for a clean world save before hard-kill.",
       "repo_url": "https://github.com/aaen-studios/kern",
@@ -45,9 +45,9 @@
         { "key": "token", "label": "Bot Token", "type": "text", "default": "" }
       ],
       "versions": [
-        { "version": "1.2.0", "kern_compat": "0.1.0", "download_url": "https://r2.kern.app/plugins/discord_bot/1.2.0.kern", "size_bytes": 96256, "changelog": "Adds rust runtime scaffolding.", "created_at": 1751500000000 },
-        { "version": "1.1.0", "kern_compat": "0.1.0", "download_url": "https://r2.kern.app/plugins/discord_bot/1.1.0.kern", "size_bytes": 90112, "changelog": "Runtime-conditional scaffold (node/bun/deno).", "created_at": 1750900000000 },
-        { "version": "1.0.0", "kern_compat": "0.1.0", "download_url": "https://r2.kern.app/plugins/discord_bot/1.0.0.kern", "size_bytes": 81920, "changelog": "Initial release.", "created_at": 1750300000000 }
+        { "version": "1.2.0", "kern_compat": "0.1.0", "download_url": "/api/download?id=discord_bot&v=1.2.0", "size_bytes": 96256, "changelog": "Adds rust runtime scaffolding.", "created_at": 1751500000000 },
+        { "version": "1.1.0", "kern_compat": "0.1.0", "download_url": "/api/download?id=discord_bot&v=1.1.0", "size_bytes": 90112, "changelog": "Runtime-conditional scaffold (node/bun/deno).", "created_at": 1750900000000 },
+        { "version": "1.0.0", "kern_compat": "0.1.0", "download_url": "/api/download?id=discord_bot&v=1.0.0", "size_bytes": 81920, "changelog": "Initial release.", "created_at": 1750300000000 }
       ],
       "readme_md": "# discord bot manager\n\na first-party plugin for running discord bots. supports **4 runtimes**: node.js, bun, deno, rust.\n\n## runtime-conditional scaffolding\n\nthe plugin generates the right starter files for the chosen runtime — a `package.json` for node/bun/deno and a `cargo.toml` for rust.\n\n## lifecycle\n\nruntime-qualified keys override the base start command:\n\n- `start.node` → `node index.js`\n- `start.bun` → `bun index.js`\n- `start.deno` → `deno run --allow-net index.js`\n- `start.rust` → runs the compiled binary via `useShell`\n\n## config\n\nset the runtime, the entry file, and your bot token (kept in userOverrides, never shipped in the manifest).",
       "repo_url": "https://github.com/aaen-studios/kern",
