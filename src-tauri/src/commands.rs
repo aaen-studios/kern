@@ -576,24 +576,23 @@ fn run_step(app_handle: &AppHandle, id: &str, step_name: &str) -> Result<(), Str
                     .to_string()
             })?;
         let overrides = instance.user_overrides.clone();
-        let mut parts = process::shell_split(&process::resolve_variables(start_cmd, &overrides));
-        if parts.is_empty() {
+        let line = process::resolve_variables(start_cmd, &overrides);
+        if line.trim().is_empty() {
             return Err("start_command is empty".to_string());
         }
-        let command = parts.remove(0);
-        let args = parts;
 
         let transient = format!("{step_name}-ing");
         set_status(app_handle, id, &transient)?;
 
-        if let Err(e) = process::launch(
+        // Run the user's line through the OS shell verbatim so PATH lookups,
+        // .cmd/.bat shims (npm / bun / yarn on Windows), env-var expansion,
+        // pipes and redirects all work — anything goes.
+        if let Err(e) = process::launch_via_shell(
             app_handle,
             id,
             std::path::Path::new(&instance.path),
-            &command,
-            &args,
-            false, // use_shell
-            None,  // java_path
+            &line,
+            None, // java_path
         ) {
             set_status(app_handle, id, "error")?;
             return Err(e);
@@ -691,33 +690,43 @@ fn run_step(app_handle: &AppHandle, id: &str, step_name: &str) -> Result<(), Str
     // ── Per-instance custom start command ───────────────────────────────
     // A user can override the plugin's start step entirely by filling in the
     // `start_command` override (set via the ⚙ button next to Start). When
-    // present and non-empty, we parse it as a shell-style command line and use
-    // it verbatim, ignoring the manifest's `start` step. Lets each project run
-    // whatever it actually needs (e.g. `bun run dev`, a specific binary, an
-    // env-injected invocation) without editing the plugin manifest.
+    // present and non-empty for a start step, we run it through the OS shell
+    // verbatim (cmd.exe /C · sh -c) so PATH lookups, .cmd/.bat shims (npm /
+    // bun / yarn on Windows), env-var expansion, pipes and redirects all work,
+    // and ignore the manifest's `start` step. Lets each project run whatever it
+    // actually needs (e.g. `bun run dev`, a specific binary, an env-injected
+    // invocation, a bare `npm`) without editing the plugin manifest.
     let custom = overrides
         .get("start_command")
         .map(|s| s.trim())
         .filter(|s| !s.is_empty());
-    let (command, mut args): (String, Vec<String>) = if step_name == "start" {
+    if step_name == "start" {
         if let Some(line) = custom {
-            // Shell-split: first token is the program, the rest are args.
-            let mut parts = process::shell_split(&process::resolve_variables(line, &overrides));
-            if parts.is_empty() {
+            let resolved = process::resolve_variables(line, &overrides);
+            if resolved.trim().is_empty() {
                 return Err("custom start_command is empty".to_string());
             }
-            let prog = parts.remove(0);
-            (prog, parts)
-        } else {
-            let c = process::resolve_variables(&step.command, &overrides);
-            let a: Vec<String> = step
-                .args
-                .iter()
-                .flat_map(|x| process::shell_split(&process::resolve_variables(x, &overrides)))
-                .collect();
-            (c, a)
+            let transient = format!("{step_name}-ing");
+            set_status(app_handle, id, &transient)?;
+            let java_path = overrides.get("java_path").map(String::as_str);
+            if let Err(e) = process::launch_via_shell(
+                app_handle,
+                id,
+                std::path::Path::new(&instance.path),
+                &resolved,
+                java_path,
+            ) {
+                set_status(app_handle, id, "error")?;
+                return Err(e);
+            }
+            set_status(app_handle, id, "running")?;
+            return Ok(());
         }
-    } else {
+    }
+
+    // ── Manifest step (no custom start_command) ─────────────────────────
+    // Resolve the manifest's step.command + step.args against the overrides.
+    let (command, mut args): (String, Vec<String>) = {
         let c = process::resolve_variables(&step.command, &overrides);
         let a: Vec<String> = step
             .args
@@ -735,11 +744,9 @@ fn run_step(app_handle: &AppHandle, id: &str, step_name: &str) -> Result<(), Str
     // instance's Cargo.toml and inject `--bin <name>` so the step always
     // launches. Skipped entirely when the step already passes `--bin`.
     //
-    // Never touches a custom `start_command` — the user opted into full manual
-    // control there, so whatever they typed (e.g. `cargo run --release`) runs
-    // exactly as written, even if it omits `--bin`.
-    if custom.is_none()
-        && command == "cargo"
+    // A custom `start_command` returns early above, so by here we're always on
+    // the manifest step and `cargo` means the plugin's own command.
+    if command == "cargo"
         && step_name == "start"
         && !args.iter().any(|a| a == "--bin" || a.starts_with("--bin="))
     {

@@ -974,11 +974,11 @@ function HeaderToolbar({
                   if (e.key === "Enter") { e.preventDefault(); void commit(); }
                   if (e.key === "Escape") { setDraft(saved); setEditing(false); }
                 }}
-                placeholder={saved || "e.g. cargo run --bin widgets-bot"}
+                placeholder={saved || "e.g. npm run dev"}
                 className="w-full bg-black/40 border border-grid-bounds focus:border-signal-low outline-none px-2 py-1.5 text-[11px] font-mono text-zinc-200"
               />
               <p className="mt-1.5 text-[10px] text-zinc-600 leading-snug">
-                overrides the plugin's start step for this project only. blank = use plugin default.
+                runs through a shell, so anything works — npm, bun, cargo, env vars, pipes. overrides the plugin's start step. blank = plugin default.
               </p>
               <div className="flex justify-end gap-1.5 mt-2">
                 <button

@@ -500,6 +500,71 @@ pub fn launch(
     use_shell: bool,
     java_path: Option<&str>,
 ) -> Result<(), String> {
+    // Build the command. When `use_shell` is true the command is invoked
+    // through the OS shell so lifecycle steps naming a script (Forge/NeoForge's
+    // generated run.sh / run.bat) can run, which `Command::new` can't do
+    // directly. Otherwise the program is spawned directly.
+    let cmd = if use_shell {
+        build_shell_command(command, args)
+    } else {
+        let mut c = Command::new(command);
+        c.args(args);
+        c
+    };
+    spawn_and_stream(
+        app_handle,
+        instance_id,
+        working_dir,
+        cmd,
+        format!("$ {} {}", command, shell_join(args)),
+        command.to_string(),
+        java_path,
+    )
+}
+
+/// Runs an arbitrary user-provided line (e.g. a custom `start_command`) through
+/// the OS shell verbatim — `cmd.exe /C` on Windows, `sh -c` on Unix — so PATH
+/// lookups, `.cmd`/`.bat` shims (npm / bun / yarn / npx / pnpm on Windows),
+/// env-var expansion, pipes and redirects all work exactly as they would in a
+/// real terminal. `raw_line` is the already-variable-resolved command string; it
+/// is handed to the shell as a single argument with no further splitting, so
+/// anything the user types is honoured.
+pub fn launch_via_shell(
+    app_handle: &AppHandle,
+    instance_id: &str,
+    working_dir: &Path,
+    raw_line: &str,
+    java_path: Option<&str>,
+) -> Result<(), String> {
+    let cmd = build_adhoc_shell_command(raw_line);
+    spawn_and_stream(
+        app_handle,
+        instance_id,
+        working_dir,
+        cmd,
+        format!("$ {raw_line}"),
+        raw_line.to_string(),
+        java_path,
+    )
+}
+
+/// Shared spawn + streaming tail used by both [`launch`] (manifest lifecycle
+/// steps) and [`launch_via_shell`] (custom start commands). Truncates
+/// `latest.log` for a fresh run, applies cwd / Windows window-suppression / the
+/// instance's `.env` / the selected JDK's `JAVA_HOME` + `PATH` / piped stdio to
+/// the (already-built) `cmd`, spawns it, registers the child in the process
+/// registry, echoes `display_line` to the terminal + log, and starts the two
+/// stdout/stderr reader threads. `spawn_label` is what shows up in the
+/// spawn-failure error message.
+fn spawn_and_stream(
+    app_handle: &AppHandle,
+    instance_id: &str,
+    working_dir: &Path,
+    mut cmd: Command,
+    display_line: String,
+    spawn_label: String,
+    java_path: Option<&str>,
+) -> Result<(), String> {
     // 0. Start fresh: truncate latest.log so the seeded tail reflects only this
     //    run, not the previous run's `[process terminated …]` marker.
     let log_path = working_dir.join("latest.log");
@@ -507,25 +572,19 @@ pub fn launch(
         // Non-fatal — streaming still works, the disk mirror just won't reset.
     }
 
-    // 1. Build the command. std::process::Command inherits the host environment
-    //    by default (so PATH etc. are preserved); layer the instance's .env on
-    //    top. Pipes on all three streams so we can read output and feed stdin.
-    let mut cmd = if use_shell {
-        build_shell_command(command, args)
-    } else {
-        let mut c = Command::new(command);
-        c.args(args);
-        c
-    };
+    // 1. Finalise the command. std::process::Command inherits the host
+    //    environment by default (so PATH etc. are preserved); layer the
+    //    instance's .env on top. Pipes on all three streams so we can read
+    //    output and feed stdin.
     cmd.current_dir(working_dir);
     suppress_window(&mut cmd);
     let env_path = working_dir.join(".env");
     let env_vars = parse_env_file(&env_path);
     // The Setup-selected JDK path is the source of truth (the explicit
     // `java_path` arg); `.env` may be stale since it's only written at server
-    // creation. From it derive JAVA_HOME and prepend the JDK's bin/ to PATH so
-    // shell-based steps (Forge/NeoForge run scripts, which call `java` from
-    // PATH rather than our `command`) resolve the same JDK the user picked.
+    //    creation. From it derive JAVA_HOME and prepend the JDK's bin/ to PATH so
+    //    shell-based steps (Forge/NeoForge run scripts, which call `java` from
+    //    PATH rather than our `command`) resolve the same JDK the user picked.
     let java_bin_dir = java_path
         .filter(|p| !p.is_empty())
         .and_then(|p| std::path::Path::new(p).parent().map(|p| p.to_path_buf()));
@@ -541,7 +600,7 @@ pub fn launch(
     }
     // Prepend JDK bin/ to PATH so the correct `java` binary is found first.
     // Use the OS-native separator (`;` on Windows, `:` on Unix) so this works
-    // cross-platform.
+    //    cross-platform.
     if let Some(bin) = &java_bin_dir {
         let bin_str = bin.to_string_lossy().to_string();
         let current_path = std::env::var("PATH").unwrap_or_default();
@@ -556,7 +615,7 @@ pub fn launch(
     //    so a missing binary / bad command never fails silently.
     let mut child = cmd
         .spawn()
-        .map_err(|e| format!("failed to spawn '{command}': {e}"))?;
+        .map_err(|e| format!("failed to spawn '{spawn_label}': {e}"))?;
 
     // Capture the OS pid up front (before the child handle is moved into the
     // registry) so the metrics sampler can resolve the process tree without
@@ -601,11 +660,12 @@ pub fn launch(
 
     // 4. Echo the resolved command line into the terminal + latest.log before
     //    any process output arrives, so the user can see exactly what was run
-    //    (custom start_command, manifest step, auto-injected --bin, etc.). Built
-    //    by re-quoting args with shell rules so flags containing spaces survive.
+    //    (custom start_command, manifest step, auto-injected --bin, etc.). The
+    //    caller passes the full pre-formatted line so each entry point formats
+    //    it appropriately (manifest step re-quotes args; a custom start command
+    //    echoes the user's verbatim line).
     let event_name = format!("log:{instance_id}:stream");
-    let echo = format!("$ {} {}", command, shell_join(args));
-    let stamped = format!("{} {}", timestamp(), echo);
+    let stamped = format!("{} {}", timestamp(), display_line);
     append_log(&log_path, stamped.as_bytes());
     let _ = app_handle.emit(&event_name, stamped.clone());
 
