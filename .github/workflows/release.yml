@@ -180,4 +180,11 @@ jobs:
               --generate-notes
           fi
 
+          # A release whose tag was ever deleted becomes a draft (or loses its
+          # "latest" flag), which would hide update.json from
+          # /releases/latest/download/ — the updater endpoint. Force it public
+          # and latest on every run so the manifest is always reachable.
+          gh release edit "$TAG" --draft=false --prerelease=false --latest \
+            --title "kern $TAG"
+
           echo "✓ Released $TAG — updater manifest: https://github.com/${{ github.repository }}/releases/latest/download/update.json"
