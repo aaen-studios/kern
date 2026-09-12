@@ -10,6 +10,7 @@
 // Run:  node scripts/prepare-nsis.mjs
 import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir, platform } from 'node:os';
@@ -93,8 +94,16 @@ function ensureCacheDlls() {
 
 function main() {
   if (!existsSync(SKIN_ZIP)) {
+    // skin.zip is gitignored (generated), so a fresh checkout — CI included —
+    // doesn't have it. The zipper is dependency-free Node, so just run it.
+    console.log('  skin.zip missing — generating from skin/ ...');
+    execFileSync(process.execPath, [join(__dirname, 'make-installer-skin.mjs')], {
+      stdio: 'inherit',
+    });
+  }
+  if (!existsSync(SKIN_ZIP)) {
     console.error(
-      `✗ skin.zip not found at ${SKIN_ZIP}.\n` +
+      `✗ skin.zip not found at ${SKIN_ZIP} and could not be generated.\n` +
         '  Run `bun run installer:assets` first to generate the skin assets and zip.'
     );
     process.exit(1);
