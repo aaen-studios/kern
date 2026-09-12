@@ -275,25 +275,31 @@ fi
 # ── Sign ────────────────────────────────────────────────────────────
 echo ""
 echo "⟳ Signing archive..."
-# Pass the password explicitly (even when empty) so the signer can never fall
-# back to an interactive prompt — in CI there is no TTY, and a prompt would
-# hang forever instead of failing. `UPDATER_PRIVATE_KEY_PASSWORD` comes from
-# src-tauri/.env (or the environment).
+# Credentials go through the CLI's documented env vars rather than flags, so
+# an empty password can never be mistaken for a missing argument. stdin is
+# closed: the signer must never block on an interactive prompt.
 TAURI_BIN="./node_modules/.bin/tauri"
 if [ ! -x "$TAURI_BIN" ]; then
   TAURI_BIN="bun run tauri"
 fi
-SIGNATURE="$($TAURI_BIN signer sign \
-  --private-key-path "$KEY_PATH" \
-  --password "${UPDATER_PRIVATE_KEY_PASSWORD:-}" \
-  "$ARCHIVE" < /dev/null 2>&1 || true)"
+SIG_OUT="$(
+  TAURI_SIGNING_PRIVATE_KEY_PATH="$KEY_PATH" \
+  TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${UPDATER_PRIVATE_KEY_PASSWORD:-}" \
+  $TAURI_BIN signer sign "$ARCHIVE" </dev/null 2>&1 || true
+)"
 
-# Extract just the signature line (starts with dW50cn... or RW...)
-SIGNATURE="$(echo "$SIGNATURE" | tr -d '\r' | grep -E '^(dW50cn|RW)' | head -1 | xargs)"
-
+# The CLI prints the signature on stdout AND writes `<archive>.sig`; accept
+# either (the file is authoritative if the banner format ever changes).
+SIGNATURE="$(echo "$SIG_OUT" | tr -d '\r' | grep -oE 'dW50cn[A-Za-z0-9+/=]+' | head -1)"
+if [ -z "$SIGNATURE" ] && [ -f "$ARCHIVE.sig" ]; then
+  SIGNATURE="$(tr -d '\r\n' < "$ARCHIVE.sig" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+fi
 if [ -z "$SIGNATURE" ]; then
-  echo "! Failed to extract signature from output:" >&2
-  echo "$SIGNATURE" >&2
+  echo "! Failed to sign '$ARCHIVE'." >&2
+  echo "--- signer output ---" >&2
+  echo "$SIG_OUT" >&2
+  echo "--- archive ---" >&2
+  ls -la "$ARCHIVE" "$ARCHIVE.sig" 2>&1 >&2 || true
   exit 1
 fi
 echo "✓ Signature captured"
