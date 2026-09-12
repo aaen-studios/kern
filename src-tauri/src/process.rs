@@ -1792,8 +1792,10 @@ mod tree_tests {
         let pid = child.id();
 
         assert!(signal_group(pid, libc::SIGKILL), "killpg failed");
+        // Reap before checking: on Linux an unreaped killed child stays in the
+        // process table as a zombie, which sysinfo still reports as existing.
+        let _ = child.wait();
         assert!(wait_gone(pid), "process group survived SIGKILL");
-        let _ = child.wait(); // reap the direct child
     }
 
     /// A `start` at the beginning of any shell segment must be rewritten to

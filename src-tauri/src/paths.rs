@@ -190,6 +190,9 @@ mod tests {
     #[test]
     fn rejects_absolute_paths() {
         assert!(normalize_relative("/etc/passwd").is_err());
+        // A leading backslash is only a root on Windows; on Unix it's a legal
+        // filename character, so this assertion is platform-specific.
+        #[cfg(windows)]
         assert!(normalize_relative("\\windows\\system32").is_err());
     }
 
@@ -250,6 +253,8 @@ mod tests {
     fn safe_file_name_rejects_separators_and_parent() {
         assert!(safe_file_name("../../etc/passwd").is_err());
         assert!(safe_file_name("a/b.zip").is_err());
+        // Backslash is a separator only on Windows.
+        #[cfg(windows)]
         assert!(safe_file_name("a\\b.zip").is_err());
         assert!(safe_file_name("..").is_err());
         assert!(safe_file_name("").is_err());
