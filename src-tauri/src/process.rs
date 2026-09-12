@@ -1129,7 +1129,7 @@ fn spawn_and_stream(
     #[cfg(windows)]
     let tree = attach_tree(&child);
     #[cfg(unix)]
-    let _tree = attach_tree(&child);
+    attach_tree(&child);
     let forced = Arc::new(AtomicBool::new(false));
     let intentional = Arc::new(AtomicBool::new(false));
     let started_secs = process_start_time(pid).unwrap_or_else(now_secs);

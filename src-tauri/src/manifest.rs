@@ -286,7 +286,23 @@ mod tests {
     #[test]
     fn version_satisfies_rejects_newer() {
         assert!(!version_satisfies("99.0.0"));
-        assert!(!version_satisfies("0.3.0"));
+        // Derive the "newer" version from the running host so the test can
+        // never go stale on a release bump (it did at 0.3.0).
+        let host = env!("CARGO_PKG_VERSION");
+        let mut parts: Vec<u64> = host
+            .split('.')
+            .map(|p| {
+                p.chars()
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect::<String>()
+            })
+            .map(|p| p.parse().unwrap_or(0))
+            .collect();
+        parts.resize(3, 0);
+        let newer = format!("{}.{}.{}", parts[0], parts[1], parts[2] + 1);
+        assert!(!version_satisfies(&newer), "expected {newer} to be rejected");
+        // The host version itself satisfies an equal requirement.
+        assert!(version_satisfies(host));
     }
 
     fn manifest_with(perms: &[&str], compat: Option<&str>) -> Manifest {
