@@ -69,12 +69,31 @@ jobs:
           workspaces: src-tauri
 
       - name: Clippy (deny warnings)
-        run: cargo clippy --lib -- -D warnings
+        shell: bash
         working-directory: src-tauri
+        run: |
+          set +e
+          cargo clippy --lib -- -D warnings 2>&1 | tee clippy.log
+          code=${PIPESTATUS[0]}
+          if [ "$code" -ne 0 ]; then
+            # Surface the error as a check annotation (job logs need auth).
+            MSG=$(tail -n 30 clippy.log | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g; s/\r//g')
+            echo "::error title=Clippy failure (${{ runner.os }})::$MSG"
+          fi
+          exit "$code"
 
       - name: Tests
-        run: cargo test --lib
+        shell: bash
         working-directory: src-tauri
+        run: |
+          set +e
+          cargo test --lib 2>&1 | tee test.log
+          code=${PIPESTATUS[0]}
+          if [ "$code" -ne 0 ]; then
+            MSG=$(grep -E 'FAILED|panicked|error\[|failures:|assertion' test.log | head -n 30 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g; s/\r//g')
+            echo "::error title=Test failure (${{ runner.os }})::$MSG"
+          fi
+          exit "$code"
 
       - name: "Installer (Windows): clippy + tests"
         if: runner.os == 'Windows'
