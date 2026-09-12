@@ -91,7 +91,9 @@ jobs:
             echo "::error::Repository secret TAURI_SIGNING_PRIVATE_KEY is not set. Add the contents of src-tauri/updater.key under Settings → Secrets and variables → Actions."
             exit 1
           fi
-          printf '%s\n' "$UPDATER_KEY" > src-tauri/updater.key
+          # No trailing newline: the signer base64-decodes the file verbatim,
+          # and the key is a single line — an appended \n fails at its offset.
+          printf '%s' "$UPDATER_KEY" > src-tauri/updater.key
 
       - name: Build, sign, and stage release assets
         shell: bash
