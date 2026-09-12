@@ -18,7 +18,7 @@ grab the latest build from the [download section](/#download).
 
 the builds are not os-code-signed. on windows, smart screen shows "windows protected your pc" the first time — choose *more info → run anyway*. after that, the app updates itself in place: updates are minisign-signed and verified before install.
 
-for the command line and the automation api, see `cli`.
+for the command line — including the full-screen dashboard (run `kern-cli` with no arguments) — and the automation api, see `cli`.
 
 ## 2. register a folder as an instance
 
