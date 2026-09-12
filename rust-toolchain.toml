@@ -1,3 +1,6 @@
 [toolchain]
-channel = "stable"
+# Pinned so local builds, CI, and release artifacts all use the same rustc and
+# clippy. New stable clippy releases surface lints that must be fixed before
+# bumping this — update it together with .github/workflows/{ci,release}.yml.
+channel = "1.91.1"
 components = ["clippy", "rustfmt"]
