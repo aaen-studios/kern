@@ -26,3 +26,12 @@ think of it as a self-hosted alternative to cloud game-panel tools (pterodactyl,
 - **host api** — the bridge plugins use to talk to tauri commands, events, and the ui shell.
 
 > **note** these docs are the source of truth for plugin developers. the app itself ships with two sample plugins — a game server plugin and a bot runner — that exercise nearly every feature.
+
+## beyond the basics
+
+- **preflight** — before a start, kern checks ports the instance used last time (with the owning pid), a pending minecraft eula, and low disk space.
+- **crash watchdog** — auto-restart with backoff after unexpected exits, plus a last-crash report (exit code + log tail) on the monitor tab.
+- **notifications** — in-app center, native os toasts when unfocused, discord/slack webhooks, and regex log alerts. see `notifications`.
+- **schedules** — interval, daily, or cron tasks (restart / start / stop / command / backup / health) with optional pre-restart console announcements.
+- **audit log** — local history of lifecycle actions, config changes, plugin installs, backups, and task runs.
+- **cli & automation** — `kern-cli` and a loopback-only json api for scripts. see `cli`.

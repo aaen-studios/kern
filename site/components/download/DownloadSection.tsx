@@ -1,6 +1,12 @@
 import Link from "next/link";
 import type { Release } from "@/lib/github";
-import { RELEASES_PAGE, formatBytes, getPlatforms } from "@/lib/github";
+import {
+  RELEASES_PAGE,
+  formatBytes,
+  getCliAssets,
+  getPlatforms,
+} from "@/lib/github";
+import type { Asset } from "@/lib/github";
 import { VersionBadge } from "@/components/download/VersionBadge";
 import { MatrixDivider } from "@/components/ui/MatrixBorder";
 import { Spotlight } from "@/components/ui/Spotlight";
@@ -27,14 +33,16 @@ export function DownloadSection({ release }: { release: Release | null }) {
             install kern
           </h2>
           <p className="mt-3 max-w-md font-mono text-xs text-signal-low">
-            native desktop app. windows ships first; macos and linux as
-            available. the app auto-updates itself — signed.
+            native desktop app. windows installs per-user (no admin
+            prompt); macos ships apple silicon; linux ships an appimage. the
+            app auto-updates itself — signed.
           </p>
         </div>
         {release && <VersionBadge tag={release.tag_name} />}
       </div>
 
       {release ? (
+        <>
         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
           {getPlatforms(release).map((p) => (
             <Spotlight key={p.os}>
@@ -53,6 +61,11 @@ export function DownloadSection({ release }: { release: Release | null }) {
                   {p.hint}
                 </span>
               </div>
+              {p.note && (
+                <span className="-mt-2 font-mono text-[10px] lowercase text-signal-low/70">
+                  {p.note}
+                </span>
+              )}
 
               {p.asset ? (
                 <>
@@ -91,6 +104,8 @@ export function DownloadSection({ release }: { release: Release | null }) {
             </Spotlight>
           ))}
         </div>
+        <CliStrip release={release} />
+        </>
       ) : (
         // §4.5 — release is null (API down at build). Degrade gracefully.
         <div className="bg-bg-surface/60 p-8 text-center" style={{ boxShadow: "inset 0 0 0 1px rgba(22,25,32,0.9)" }}>
@@ -110,5 +125,59 @@ export function DownloadSection({ release }: { release: Release | null }) {
 
       <MatrixDivider className="mt-16" />
     </section>
+  );
+}
+
+/*
+  "command line" strip — kern-cli binaries + quick examples. Hidden when the
+  release has no CLI assets (older releases).
+*/
+function CliStrip({ release }: { release: Release }) {
+  const cli = getCliAssets(release);
+  if (!cli.windows && !cli.unix) return null;
+  return (
+    <div
+      className="mt-4 flex flex-col gap-3 bg-bg-surface/60 p-5"
+      style={{ boxShadow: "inset 0 0 0 1px rgba(22,25,32,0.9)" }}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="font-mono text-sm lowercase text-zinc-100">
+          command line
+        </h3>
+        <span className="font-mono text-[10px] lowercase text-signal-low">
+          kern-cli · ships with the app
+        </span>
+      </div>
+      <div className="flex flex-wrap items-center gap-3">
+        {cli.windows && <CliLink asset={cli.windows} />}
+        {cli.unix && <CliLink asset={cli.unix} />}
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {[
+          "kern-cli status",
+          'kern-cli start "My Server"',
+          'kern-cli logs "My Server" --follow',
+        ].map((line) => (
+          <code
+            key={line}
+            className="bg-bg-core px-2 py-1 font-mono text-[11px] text-signal-low ring-1 ring-grid-bounds"
+          >
+            {line}
+          </code>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CliLink({ asset }: { asset: Asset }) {
+  return (
+    <a
+      href={asset.browser_download_url}
+      className="inline-flex items-center gap-2 bg-bg-core px-3 py-1.5 font-mono text-[11px] lowercase text-zinc-300 ring-1 ring-grid-bounds transition hover:text-signal-high"
+    >
+      {asset.name}
+      <span className="text-signal-low">{formatBytes(asset.size)}</span>
+    </a>
   );
 }

@@ -29,7 +29,7 @@ production-ready Next.js application plus a Cloudflare-hosted plugin registry ba
 - **Color is semantic.** Green = running/active/CTA, amber = transitional/warn, crimson = error, gray = standby. Never decorative.
 - **Copy is lowercase, terse, technical, monospace-flavored.** See §3.6 for examples.
 - **Static-first.** All marketing/docs/download content must build to static HTML. Only the plugin registry has a live backend.
-- **The canonical GitHub repo is `ellipog/kern`.** Use it everywhere, consistently. (Do not mix org names.)
+- **The canonical GitHub repo is `aaen-studios/kern`.** Use it everywhere, consistently. (Do not mix org names.)
 - **Accessibility is non-negotiable.** Gate all shader/animation on `prefers-reduced-motion`. Provide skip links, visible focus, and ARIA on decorative canvas regions.
 
 ### When to stop and ask
@@ -54,8 +54,9 @@ Internal codename / document title: **"Lightweight Extensible Server Panel Host.
 - **Server registry** — register any project folder as a "server instance." Full CRUD, orphaned-state detection
   (if a folder is moved/deleted, the instance is flagged "orphaned" rather than silently dropped).
 - **Lifecycle controls** — Start / Stop / Restart / Install, driven by each plugin's `lifecycle` manifest block.
-  Graceful shutdown with a **15-second timeout** before hard-kill — deliberately tuned so *Minecraft world saves
-  complete* (chunk flush + level.dat) before teardown.
+  Graceful shutdown first (configurable window, 30s default) then a guaranteed force-kill of the whole process
+  tree (Windows Job Objects / Unix process groups) — deliberately tuned so *Minecraft world saves complete*
+  (chunk flush + level.dat) before teardown.
 - **Live terminal** — process stdout/stderr streamed live to the UI, appended to `<instance>/latest.log`, with
   full **ANSI color parsing**, dimmed timestamps, command history (Up/Down), and a scroll-to-bottom affordance.
   The input box doubles as a command dispatcher (`start`/`stop`/`restart`/`install` trigger lifecycle; other input is piped to stdin).
@@ -87,8 +88,10 @@ folder shortcuts. Secondary: plugin developers (the docs hub and registry are fo
 
 ### 1.6 Tech stack of the app (for reference / "built with" colophon)
 Tauri 2 · Rust (`sysinfo`, `ureq`, `zip`, `walkdir`) · React 19 · Tailwind CSS 4 · TypeScript · Vite 7 ·
-Monaco Editor · Bun (package manager + dev). Cross-platform via `deploy.sh` (NSIS on Windows, `.dmg` on macOS,
-`.AppImage`/`.deb` on Linux).
+Monaco Editor · Bun (package manager + dev). Distribution via a tag-triggered GitHub Actions release
+pipeline: a **custom per-user Windows installer** (`kern-setup.exe`; no admin, registers `.kern` + `kern://`,
+ships `kern-cli`), an **Apple Silicon `.dmg`** on macOS, and an **AppImage** on Linux. Every release also
+publishes the signed updater archives and a merged `update.json`.
 
 ### 1.7 Site goals
 1. **Convert** visitors to downloads (Windows first; macOS/Linux as available).
@@ -223,12 +226,12 @@ Buttons: lowercase verbs — `download`, `view on github`, `install in kern`, `r
 > download page** — fetch at build time, bake into static HTML, revalidate hourly.
 
 ### 4.1 Release-fetch library — `lib/github.ts`
-Reimplement this (pointed at `ellipog/kern`, not galdr):
+Reimplement this (pointed at `aaen-studios/kern`, not galdr):
 ```ts
 export interface Asset  { name: string; browser_download_url: string; size: number; }
 export interface Release{ tag_name: string; html_url: string; assets: Asset[]; body: string; published_at: string; }
 
-const API = "https://api.github.com/repos/ellipog/kern";
+const API = "https://api.github.com/repos/aaen-studios/kern";
 
 function authHeaders(): Record<string, string> {
   const h: Record<string, string> = { Accept: "application/vnd.github.v3+json" };
@@ -264,35 +267,73 @@ export async function getReleasesPage(page: number): Promise<Release[]> {
 ```
 
 ### 4.2 Per-platform asset matching
-Render **one card per OS** (Windows / macOS / Linux). Match assets by substring; **prefer the asset whose name
-contains the version string** to avoid grabbing stale assets from older releases. Degrade to "Not available yet"
-with a fallback link to the GitHub releases page.
+Render **one card per OS** (Windows / macOS / Linux), plus a small **command line** strip for `kern-cli`.
+kern's release assets (v0.3.0+):
+
+| platform | human download | updater artifact (never shown) |
+|---|---|---|
+| windows | `kern-setup.exe` (no version in the name) | `kern-setup.exe.zip` |
+| macOS | `kern_<v>_aarch64.dmg` (apple silicon only) | `kern.app.tar.gz` |
+| linux | `kern_<v>_amd64.AppImage` (no `.deb`) | `.AppImage.tar.gz` |
+| cli | `kern-cli.exe` / `kern-cli` | — |
+
+Matching rules (implemented in `lib/github.ts`):
+1. **Never** offer `.zip`, `.tar.gz`, `.dmg.gz`, `.sig`, or `update.json` as a human download (those are
+   updater artifacts / manifests).
+2. Prefer an **exact filename** (`kern-setup.exe`, `kern-cli.exe`) — version-less names can't be matched by
+   substring safely.
+3. Otherwise prefer a **version-tagged** match so a stale asset from the same release can't win.
+4. macOS and Linux carry a caveat note ("no intel build yet" / "no .deb yet"). Degrade to "Not available
+   yet" with a fallback link to the GitHub releases page.
 
 ```ts
-function findBestAsset(assets: Asset[], patterns: string[], version: string): Asset | undefined {
-  const matches = assets.filter(a => patterns.some(p => a.name.toLowerCase().includes(p)));
-  return matches.find(a => a.name.includes(version))          // 1. version-tagged filename
-     ?? matches.sort((a,b) => b.name.localeCompare(a.name))[0]; // 2. newest by name
+export interface AssetMatch {
+  exact?: string;        // exact filename to prefer (covers version-less names)
+  includes?: string[];   // case-insensitive substrings — any match qualifies
+  excludes?: string[];   // substrings that disqualify a candidate
 }
 
-function getPlatforms(release: Release) {
+export function findBestAsset(assets: Asset[], match: AssetMatch, version: string): Asset | undefined {
+  const lower = (s: string) => s.toLowerCase();
+  const usable = assets.filter((a) => {
+    if (!isHumanArtifact(a.name)) return false; // excludes .zip/.tar.gz/.dmg.gz/.sig/.json
+    return !match.excludes?.some((x) => lower(a.name).includes(lower(x)));
+  });
+  if (match.exact) {
+    const exact = usable.find((a) => lower(a.name) === lower(match.exact!));
+    if (exact) return exact;
+  }
+  const matches = usable.filter((a) => match.includes?.some((p) => lower(a.name).includes(lower(p))));
+  const versionMatches = matches.filter((a) => a.name.includes(version));
+  if (versionMatches.length > 0) return versionMatches.sort((a, b) => b.name.localeCompare(a.name))[0];
+  return match.exact ? undefined : matches.sort((a, b) => b.name.localeCompare(a.name))[0];
+}
+
+export function getPlatforms(release: Release) {
   const version = release.tag_name.replace(/^v/i, "");
   return [
-    { os: "Windows", asset: findBestAsset(release.assets, [".exe", "-setup", "nsis"], version) },
-    { os: "macOS",   asset: findBestAsset(release.assets, [".dmg", ".app.tar.gz"], version) },
-    { os: "Linux",   asset: findBestAsset(release.assets, [".appimage", ".deb"], version) },
+    { os: "Windows", hint: "per-user installer · x64 · no admin",
+      asset: findBestAsset(release.assets, { exact: "kern-setup.exe", includes: ["setup"] }, version) },
+    { os: "macOS", hint: "apple silicon (m-series) · dmg", note: "no intel build yet",
+      asset: findBestAsset(release.assets, { exact: `kern_${version}_aarch64.dmg`, includes: [".dmg"] }, version) },
+    { os: "Linux", hint: "appimage · x64", note: "no .deb yet",
+      asset: findBestAsset(release.assets, { exact: `kern_${version}_amd64.AppImage`, includes: [".appimage"] }, version) },
   ];
 }
+
+export function getCliAssets(release: Release) {
+  const exact = (name: string) => release.assets.find((a) => a.name.toLowerCase() === name.toLowerCase());
+  return { windows: exact("kern-cli.exe"), unix: exact("kern-cli") };
+}
 ```
-> Note: kern ships a Windows **NSIS** installer (`kern_<v>_x64-setup.exe` style) and the deploy script produces
-> `.dmg` (macOS) and `.AppImage`/`.deb` (Linux). The patterns above cover all three. Adjust substrings to the
-> actual asset names once the first multi-platform release ships.
 
 ### 4.3 Download card UI
 Each card: OS label, the matched asset's filename, file size (`(bytes/1024/1024).toFixed(1) + " MB"`), a primary
 `download` button linking to `asset.browser_download_url` (signal-green), and the OS that has no asset shows
 "Not available yet" (signal-low) with a secondary link to `https://github.com/aaen-studios/kern/releases/latest`.
-Show the latest **version badge** (`v{tag_name}`) above the cards.
+Show the latest **version badge** (`v{tag_name}`) above the cards. Below the three cards, render a compact
+**command line** strip listing `kern-cli.exe` / `kern-cli` with a couple of example invocations
+(`kern-cli status`), hidden when the release carries no CLI assets.
 
 ### 4.4 Signed-update awareness (do not re-implement, just reference)
 kern's desktop auto-updater pulls `releases/latest/download/update.json` (minisign-signed). The website's
@@ -596,7 +637,7 @@ handles triple-backtick **fenced code blocks**, `##`/`###` headings, `-`/`*` uno
 `` `code` ``, **bold**, and `[text](url)` links. Map headings → kern heading styles; code → Shiki or a styled `<pre>`.
 
 ### 9.4 Community
-- GitHub: `github.com/ellipog/kern` (Issues for bugs, Discussions for Q&A + plugin showcases).
+- GitHub: `github.com/aaen-studios/kern` (Issues for bugs, Discussions for Q&A + plugin showcases).
 - Discord invite (placeholder until created).
 - "Show your setup" / plugin showcase prompt linking to Discussions.
 
@@ -617,7 +658,7 @@ Compose top-to-bottom (all sharing the §3 design system):
 4. **Live terminal** feature — a faux terminal mockup with a streaming dot-wave status banner and ANSI-colored
    sample log lines (`[12:04:31] [Server thread/INFO]: Done (3.2s)! For help, type "help"`).
 5. **Reactor channel / telemetry** — the matrix bar mockup with cpu/ram/log-activity readouts (amber at >90%).
-6. **Lifecycle** — start/stop/restart buttons + a callout about the 15-second graceful shutdown ("world saves complete first").
+6. **Lifecycle** — start/stop/restart buttons + a callout about the graceful shutdown window (default 30s) before the guaranteed hard-kill ("world saves complete first").
 7. **File editor** — a Monaco-style mock with a file tree.
 8. **Plugins** — the two flagship plugins as cards (Minecraft Java — 7 softwares; Discord Bot — 4 runtimes),
    with a `browse all plugins →` link to `/plugins`.
@@ -762,5 +803,5 @@ Production: `https://kern.aaenz.no`. Configure DNS for Vercel (site) and a `api.
 ---
 
 *End of master prompt. Hand this file to your AI agent or developer. The first concrete, verifiable milestone is
-a deployable landing page whose Download section renders real version + asset data from `ellipog/kern` GitHub
+a deployable landing page whose Download section renders real version + asset data from `aaen-studios/kern` GitHub
 Releases — build that before anything else.*

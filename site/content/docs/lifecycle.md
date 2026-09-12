@@ -44,6 +44,6 @@ set `useShell: true` to run the command through a shell. needed for some install
 
 ## graceful shutdown
 
-`stop` triggers a **graceful shutdown with a 15-second timeout** before hard-kill. this is deliberately tuned so active work completes — pending operations drain before teardown.
+`stop` sends the graceful shutdown first (stdin command and/or your plugin's `stop` step) and waits the instance's timeout before hard-kill. the timeout defaults to **30 seconds** and is configurable per instance (`stopTimeoutSecs`); the whole process tree is terminated after that, and the instance is reported as `stopped-forced`.
 
-> **warn** don&rsquo;t put destructive commands in `stop`. the host will hard-kill after 15s if your command hasn&rsquo;t returned, but you should design `stop` to return promptly (e.g. send a `stop` to the server stdin, not a `kill -9`).
+> **warn** don&rsquo;t put destructive commands in `stop`. the host will hard-kill after the timeout if your command hasn&rsquo;t returned, but you should design `stop` to return promptly (e.g. send a `stop` to the server stdin, not a `kill -9`).

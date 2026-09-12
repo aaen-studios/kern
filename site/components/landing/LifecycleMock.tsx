@@ -3,9 +3,8 @@ import { StatusDots } from "@/components/ui/StatusDots";
 
 /*
   §10.6 — Lifecycle. Start / Stop / Restart / Install, driven by each plugin's
-  lifecycle manifest block. Graceful shutdown with a 15-second timeout before
-  hard-kill — deliberately tuned so in-flight requests finish
-  (active connections drain) before teardown.
+  lifecycle manifest block. Graceful shutdown window first (default 30s), then a
+  guaranteed tree-kill — no orphans, no silent drops.
 */
 
 function LifeButton({
@@ -73,11 +72,11 @@ export function LifecycleMock() {
                 {"// "}graceful shutdown
               </p>
               <p className="mt-2 font-mono text-sm lowercase text-zinc-200">
-                15-second timeout before hard-kill.
+                graceful window, then guaranteed hard-kill.
               </p>
               <p className="mt-2 font-mono text-xs text-signal-low">
-                deliberately tuned so in-flight requests finish — active
-                connections drain before teardown. no silent drops.
+                the whole process tree goes down — no orphans. tune the window
+                per instance; 30 seconds is the default.
               </p>
             </div>
           </div>

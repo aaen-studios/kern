@@ -10,11 +10,21 @@ description: download kern, register a folder, start an instance.
 
 ## 1. download
 
-grab the latest build from the [download section](/#download). windows ships first as an nsis installer; macos (`.dmg`) and linux (`.appimage` / `.deb`) follow. the app auto-updates itself after that — updates are minisign-signed.
+grab the latest build from the [download section](/#download).
+
+- **windows** — `kern-setup.exe`, a **per-user installer**: no admin or uac prompt, installs to `%localappdata%\kern`, creates start menu and optional desktop shortcuts, and registers `.kern` file associations and the `kern://` protocol so double-clicking a plugin package just works. it also installs `kern-cli`.
+- **macos** — apple silicon `.dmg` (no intel build yet). gatekeeper may refuse the first launch: right-click → *open*.
+- **linux** — `.appimage` (no `.deb` yet).
+
+the builds are not os-code-signed. on windows, smart screen shows "windows protected your pc" the first time — choose *more info → run anyway*. after that, the app updates itself in place: updates are minisign-signed and verified before install.
+
+for the command line and the automation api, see `cli`.
 
 ## 2. register a folder as an instance
 
 a "server instance" is just a project folder kern knows about. point kern at a directory and it becomes a managed instance — no daemons, no config files, no docker.
+
+already have a server folder? the register flow has an **import** option: pick the folder and kern inspects it (jars, launch scripts, `server.properties`, `eula.txt`) and pre-fills the plugin runtime for you. nothing is moved or modified.
 
 if a folder is moved or deleted, the instance is flagged **orphaned** rather than silently dropped, so you always know what kern thinks exists.
 
@@ -30,6 +40,6 @@ plugins ship as `.kern` files (a zip with a `manifest.json` and an optional `dis
 2. fill the config form (rendered dynamically from the plugin's `configSchema`).
 3. hit `start`. stdout/stderr stream live to the terminal, appended to `<instance>/latest.log`, with full ansi color.
 4. the input box is a command dispatcher: `start` / `stop` / `restart` / `install` trigger lifecycle; anything else is piped to stdin.
-5. `stop` triggers a **graceful shutdown with a 15-second timeout** before hard-kill — tuned so in-flight requests finish (active connections drain) first.
+5. `stop` triggers a **graceful shutdown first** — kern sends the stop command, waits the instance's timeout (30 seconds by default, configurable per instance), then force-kills the whole process tree if it hasn't exited. a forced stop shows as `stopped-forced`.
 
-> **note** per-process telemetry (cpu + ram via `sysinfo`) shows as a reactor channel bar that turns amber above 90% cpu and red on fault.
+> **note** per-process telemetry (cpu + ram via `sysinfo`) shows as a reactor channel bar that turns amber above 90% cpu and red on fault. when a server exits unexpectedly, the monitor shows a **last crash** card with the exit code and the final log lines.
