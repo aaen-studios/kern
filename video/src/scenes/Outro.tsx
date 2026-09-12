@@ -92,7 +92,7 @@ export const Outro: React.FC = () => {
           marginTop: 8,
         }}
       >
-        github.com/ellipog/kern
+        github.com/aaen-studios/kern
       </div>
     </div>
   );

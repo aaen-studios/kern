@@ -99,7 +99,7 @@ if (Object.keys(platforms).length === 0) {
 
 const merged = {
   version,
-  notes: notes ?? `See https://github.com/ellipog/kern/releases/tag/v${version}`,
+  notes: notes ?? `See https://github.com/aaen-studios/kern/releases/tag/v${version}`,
   pub_date: pubDate ?? new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
   platforms,
 };

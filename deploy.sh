@@ -321,12 +321,12 @@ PUB_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 cat > update.json <<JSON
 {
   "version": "$VERSION",
-  "notes": "See https://github.com/ellipog/kern/releases/tag/v$VERSION",
+  "notes": "See https://github.com/aaen-studios/kern/releases/tag/v$VERSION",
   "pub_date": "$PUB_DATE",
   "platforms": {
     "$UPDATE_KEY": {
       "signature": "$SIGNATURE",
-      "url": "https://github.com/ellipog/kern/releases/download/v$VERSION/$ARCHIVE_NAME"
+      "url": "https://github.com/aaen-studios/kern/releases/download/v$VERSION/$ARCHIVE_NAME"
     }
   }
 }

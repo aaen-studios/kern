@@ -29,7 +29,7 @@ production-ready Next.js application plus a Cloudflare-hosted plugin registry ba
 - **Color is semantic.** Green = running/active/CTA, amber = transitional/warn, crimson = error, gray = standby. Never decorative.
 - **Copy is lowercase, terse, technical, monospace-flavored.** See §3.6 for examples.
 - **Static-first.** All marketing/docs/download content must build to static HTML. Only the plugin registry has a live backend.
-- **The canonical GitHub repo is `ellipog/kern`.** Use it everywhere, consistently. (Do not mix org names.)
+- **The canonical GitHub repo is `aaen-studios/kern`.** Use it everywhere, consistently. (Do not mix org names.)
 - **Accessibility is non-negotiable.** Gate all shader/animation on `prefers-reduced-motion`. Provide skip links, visible focus, and ARIA on decorative canvas regions.
 
 ### When to stop and ask
@@ -223,12 +223,12 @@ Buttons: lowercase verbs — `download`, `view on github`, `install in kern`, `r
 > download page** — fetch at build time, bake into static HTML, revalidate hourly.
 
 ### 4.1 Release-fetch library — `lib/github.ts`
-Reimplement this (pointed at `ellipog/kern`, not galdr):
+Reimplement this (pointed at `aaen-studios/kern`, not galdr):
 ```ts
 export interface Asset  { name: string; browser_download_url: string; size: number; }
 export interface Release{ tag_name: string; html_url: string; assets: Asset[]; body: string; published_at: string; }
 
-const API = "https://api.github.com/repos/ellipog/kern";
+const API = "https://api.github.com/repos/aaen-studios/kern";
 
 function authHeaders(): Record<string, string> {
   const h: Record<string, string> = { Accept: "application/vnd.github.v3+json" };
@@ -291,7 +291,7 @@ function getPlatforms(release: Release) {
 ### 4.3 Download card UI
 Each card: OS label, the matched asset's filename, file size (`(bytes/1024/1024).toFixed(1) + " MB"`), a primary
 `download` button linking to `asset.browser_download_url` (signal-green), and the OS that has no asset shows
-"Not available yet" (signal-low) with a secondary link to `https://github.com/ellipog/kern/releases/latest`.
+"Not available yet" (signal-low) with a secondary link to `https://github.com/aaen-studios/kern/releases/latest`.
 Show the latest **version badge** (`v{tag_name}`) above the cards.
 
 ### 4.4 Signed-update awareness (do not re-implement, just reference)
@@ -301,7 +301,7 @@ channel — just mention "auto-updates itself" as a feature on the landing page.
 
 ### 4.5 Fallback when release is null
 If `getRelease()` returns null (API down at build time), render the download section with a single link to
-`https://github.com/ellipog/kern/releases/latest`. **Never crash the page.**
+`https://github.com/aaen-studios/kern/releases/latest`. **Never crash the page.**
 
 ---
 
@@ -596,7 +596,7 @@ handles triple-backtick **fenced code blocks**, `##`/`###` headings, `-`/`*` uno
 `` `code` ``, **bold**, and `[text](url)` links. Map headings → kern heading styles; code → Shiki or a styled `<pre>`.
 
 ### 9.4 Community
-- GitHub: `github.com/ellipog/kern` (Issues for bugs, Discussions for Q&A + plugin showcases).
+- GitHub: `github.com/aaen-studios/kern` (Issues for bugs, Discussions for Q&A + plugin showcases).
 - Discord invite (placeholder until created).
 - "Show your setup" / plugin showcase prompt linking to Discussions.
 
@@ -762,5 +762,5 @@ Production: `https://kern.app`. Configure DNS for Vercel (site) and a `api.kern.
 ---
 
 *End of master prompt. Hand this file to your AI agent or developer. The first concrete, verifiable milestone is
-a deployable landing page whose Download section renders real version + asset data from `ellipog/kern` GitHub
+a deployable landing page whose Download section renders real version + asset data from `aaen-studios/kern` GitHub
 Releases — build that before anything else.*

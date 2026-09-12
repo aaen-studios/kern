@@ -63,7 +63,7 @@
     },
     "updater": {
       "endpoints": [
-        "https://github.com/ellipog/kern/releases/latest/download/update.json"
+        "https://github.com/aaen-studios/kern/releases/latest/download/update.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDgxMUI3RDY5RjQwN0QzRjcKUldUMzB3ZjBhWDBiZ1JnZnVXRWk3OW12RnAyYnBlQmJJM0pVMVhaOGF1Yjl5VUtGL213bFg1OU4K",
       "windows": {
