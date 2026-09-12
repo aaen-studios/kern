@@ -144,6 +144,8 @@ export interface AppSettings {
   closeToTray: boolean;
   /** When launched by the OS at login, start hidden in the tray. */
   startHiddenInTray: boolean;
+  /** Animate the tray icon as a live radar (sweep + one blip per server). */
+  trayRadar?: boolean;
   /** Local electricity price per kWh. Drives the cost meter. 0 = disabled. */
   powerPricePerKwh?: number;
   /** Average machine power draw in watts (user-tuned to their hardware). */

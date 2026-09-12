@@ -3,15 +3,14 @@
 //! Plain HTTP bound to `127.0.0.1` only (never the LAN), Bearer-token
 //! authenticated. The port + token are published to
 //! `<app_data>/automation.json` so the CLI can discover them; the file is
-//! rewritten on every startup and reused when present so the token is stable.
+//! rewritten on every startup and the token is reused when present so it
+//! stays stable. The discovery file also carries the host pid + start time so
+//! a stale file (crashed app, old port) is diagnosable.
 //!
-//! Endpoints (all JSON, all requiring `Authorization: Bearer <token>`):
-//!
-//!   GET  /status                    → { version, automation }
-//!   GET  /servers                   → { servers: [...] }
-//!   GET  /servers/{id}/log?lines=N  → { lines: [...] }   (max 1000)
-//!   POST /servers/{id}/{action}     → start | stop | restart
-//!   POST /servers/{id}/stdin        → { "line": "say hi" } or raw text
+//! This module owns the listener, auth, and request plumbing; the route table
+//! lives in [`crate::automation_api`]. See that module's docs for the full
+//! endpoint list — the API is versioned and reports its version from
+//! `GET /status`.
 //!
 //! HTTPS stays reserved for the LAN web remote; loopback is not exposed to
 //! the network, so plain HTTP avoids the self-signed certificate dance for a
@@ -28,12 +27,10 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
 use crate::config;
-use crate::process;
 use crate::web_remote;
 
 const MAX_HEADER_BYTES: u64 = 16 * 1024;
 const MAX_BODY_BYTES: u64 = 64 * 1024;
-const MAX_LOG_LINES: usize = 1000;
 
 /// Server state: whether it's listening + the active token.
 #[derive(Default)]
@@ -42,11 +39,24 @@ pub struct AutomationState {
     pub token: Mutex<String>,
 }
 
+fn default_endpoint_version() -> u32 {
+    1
+}
+
 /// The published discovery document (`automation.json`).
+///
+/// v2 adds `version`, `pid`, and `started_at`; older files (token+port only)
+/// still parse, and readers must tolerate missing fields.
 #[derive(Serialize, Deserialize)]
 struct Endpoint {
+    #[serde(default = "default_endpoint_version")]
+    version: u32,
     port: u16,
     token: String,
+    #[serde(default)]
+    pid: u32,
+    #[serde(default)]
+    started_at: u64,
 }
 
 /// Spawns the loopback server if the setting is enabled. No-op otherwise.
@@ -96,8 +106,14 @@ fn write_endpoint(app: &AppHandle, port: u16, token: &str) {
         return;
     };
     let endpoint = Endpoint {
+        version: 2,
         port,
         token: token.to_string(),
+        pid: std::process::id(),
+        started_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
     };
     if let Ok(raw) = serde_json::to_string_pretty(&endpoint) {
         let _ = std::fs::write(path, raw);
@@ -208,7 +224,8 @@ fn handle_conn(app: &AppHandle, mut stream: TcpStream, token: &str) -> std::io::
         let parts: Vec<&str> = request_line.split_whitespace().collect();
         method = parts.first().copied().unwrap_or("").to_string();
         target = parts.get(1).copied().unwrap_or("").to_string();
-        if method == "POST" && content_length > 0 {
+        // Read the body for any method that declares one (POST/PATCH/...).
+        if content_length > 0 {
             if content_length > MAX_BODY_BYTES {
                 return web_remote::respond(&mut stream, 413, "application/json", &web_remote::err("body too large"));
             }
@@ -234,90 +251,8 @@ fn handle_conn(app: &AppHandle, mut stream: TcpStream, token: &str) -> std::io::
         .split_once('?')
         .map(|(p, q)| (p.to_string(), q.to_string()))
         .unwrap_or((target.clone(), String::new()));
-    let (status, content_type, body) = route(app, &method, &path, &query, &body);
+    let (status, content_type, body) = crate::automation_api::route(app, &method, &path, &query, &body);
     web_remote::respond(&mut stream, status, content_type, &body)
-}
-
-/// Routes an authenticated request. Returns (status, content-type, body).
-fn route(
-    app: &AppHandle,
-    method: &str,
-    path: &str,
-    query: &str,
-    body: &str,
-) -> (u16, &'static str, String) {
-    match (method, path) {
-        ("GET", "/status") | ("GET", "/health") => (
-            200,
-            "application/json",
-            serde_json::json!({
-                "status": "ok",
-                "version": env!("CARGO_PKG_VERSION"),
-            })
-            .to_string(),
-        ),
-        ("GET", "/servers") => (200, "application/json", web_remote::servers_json(app)),
-        ("GET", p) if p.starts_with("/servers/") && p.ends_with("/log") => {
-            let id = p
-                .trim_start_matches("/servers/")
-                .trim_end_matches("/log")
-                .trim_end_matches('/');
-            let lines = query
-                .split('&')
-                .filter_map(|pair| pair.split_once('='))
-                .find(|(k, _)| *k == "lines")
-                .and_then(|(_, v)| v.parse::<usize>().ok())
-                .unwrap_or(200)
-                .clamp(1, MAX_LOG_LINES);
-            match web_remote::tail_log(app, id) {
-                Ok(mut all) => {
-                    let start = all.len().saturating_sub(lines);
-                    all.drain(..start);
-                    (
-                        200,
-                        "application/json",
-                        serde_json::json!({ "lines": all }).to_string(),
-                    )
-                }
-                Err(e) => (404, "application/json", web_remote::err(&e)),
-            }
-        }
-        ("POST", p) if p.starts_with("/servers/") && p.ends_with("/stdin") => {
-            let id = p
-                .trim_start_matches("/servers/")
-                .trim_end_matches("/stdin")
-                .trim_end_matches('/');
-            let line = serde_json::from_str::<serde_json::Value>(body)
-                .ok()
-                .and_then(|v| v.get("line").and_then(|l| l.as_str()).map(str::to_string))
-                .unwrap_or_else(|| body.trim().to_string());
-            if line.is_empty() {
-                return (
-                    400,
-                    "application/json",
-                    web_remote::err("missing line (send {\"line\": \"...\"} or raw text)"),
-                );
-            }
-            let mut data = line;
-            data.push('\n');
-            match process::write_stdin(app, id, &data) {
-                Ok(()) => (
-                    200,
-                    "application/json",
-                    r#"{"ok":true}"#.to_string(),
-                ),
-                Err(e) => (400, "application/json", web_remote::err(&e)),
-            }
-        }
-        ("POST", p) if p.starts_with("/servers/") => {
-            let rest: Vec<&str> = p.trim_start_matches("/servers/").split('/').collect();
-            match (rest.first(), rest.get(1)) {
-                (Some(id), Some(action)) => web_remote::act(app, id, action),
-                _ => (404, "application/json", web_remote::err("not found")),
-            }
-        }
-        _ => (404, "application/json", web_remote::err("not found")),
-    }
 }
 
 #[cfg(test)]
@@ -325,27 +260,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn route_rejects_unknown_paths() {
-        // Route needs an AppHandle for most paths; only the fallthrough and
-        // pure parsing are exercised here.
+    fn endpoint_v2_round_trips() {
         let endpoint = Endpoint {
+            version: 2,
             port: 7442,
             token: "abc".to_string(),
+            pid: 1234,
+            started_at: 1_700_000_000,
         };
         let raw = serde_json::to_string(&endpoint).unwrap();
         let back: Endpoint = serde_json::from_str(&raw).unwrap();
+        assert_eq!(back.version, 2);
         assert_eq!(back.port, 7442);
         assert_eq!(back.token, "abc");
+        assert_eq!(back.pid, 1234);
+        assert_eq!(back.started_at, 1_700_000_000);
     }
 
     #[test]
-    fn stdin_line_parsing_accepts_json_and_raw() {
-        let from_json = serde_json::from_str::<serde_json::Value>(r#"{"line":"say hi"}"#)
-            .ok()
-            .and_then(|v| v.get("line").and_then(|l| l.as_str()).map(str::to_string))
-            .unwrap_or_default();
-        assert_eq!(from_json, "say hi");
-        let raw = "list".to_string();
-        assert_eq!(raw, "list");
+    fn legacy_endpoint_file_still_parses() {
+        // v1 files carried only port + token; the v2 fields must default.
+        let raw = r#"{ "port": 7442, "token": "abc" }"#;
+        let back: Endpoint = serde_json::from_str(raw).unwrap();
+        assert_eq!(back.version, 1);
+        assert_eq!(back.port, 7442);
+        assert_eq!(back.pid, 0);
+        assert_eq!(back.started_at, 0);
     }
 }

@@ -17,10 +17,11 @@ A desktop server manager for Windows, macOS, and Linux. Register any project as 
 - **World Backups**: Scheduled snapshots with restore/delete and on-stop hooks; refuses backups that won't fit on disk
 - **Crash Watchdog**: Auto-restart with exponential backoff and notifications, with a "last crash" report (exit code + log tail)
 - **RCON/Query**: Console, player list, and status for RCON-capable servers (password in the OS keyring)
+- **Live Tray Radar**: The tray icon animates as a mini radar — sweep speed follows CPU load, one pulsing blip per running server, colors show health, and a fault blinks crimson
 - **Notification Center**: Persistent history with jump-to-server, native OS toasts when unfocused, and outbound Discord/Slack webhooks
 - **Log Alerts**: User-defined regex rules matched against streamed logs (e.g. `OutOfMemoryError`)
 - **Import Existing Servers**: Adopt an existing server folder — jar/script detection suggests the runtime automatically
-- **Automation API + `kern-cli`**: Loopback-only JSON API and a scriptable CLI (`status`, `list`, `start`, `stop`, `restart`, `logs --follow`, `say`)
+- **Automation API + `kern-cli`**: Versioned loopback-only JSON API (v2) and a scriptable CLI with a full-screen dashboard, fleet selectors, log filtering, backups/tasks, and shell completions
 - **Audit Log**: Local history of lifecycle actions, config changes, plugin installs, backups, and task runs (exportable)
 - **Scheduled Tasks**: Interval/daily/cron tasks with pre-restart console announcements and run-now
 - **Web Remote**: Self-signed HTTPS mobile control panel paired by QR code
@@ -63,16 +64,28 @@ kern serves a **loopback-only** JSON API on `127.0.0.1:7442` (never exposed to
 the network) with a Bearer token published in `<app_data>/automation.json`.
 The bundled `kern-cli` reads it automatically (installed alongside the app as
 `%LOCALAPPDATA%\kern\kern-cli.exe`, or built at
-`src-tauri/target/<profile>/kern-cli.exe`):
+`src-tauri/target/<profile>/kern-cli.exe`). Full references:
+[docs/cli](https://kern.aaenz.no/docs/cli) · [docs/automation-api](https://kern.aaenz.no/docs/automation-api).
+
+Run `kern-cli` with no arguments for the interactive dashboard (fleet table,
+live log tail, event ticker). Everything is scriptable:
 
 ```bash
-kern-cli status
-kern-cli list --json
-kern-cli start "My Server"        # id or exact name
-kern-cli stop "My Server"
-kern-cli logs "My Server" --follow
-kern-cli say "My Server" Server restarting soon
+kern-cli status                              # app + host, api version
+kern-cli list --running --tag prod           # fleet queries
+kern-cli start "My Server" --wait --timeout 2m
+kern-cli stop --group minecraft --wait       # fleet actions
+kern-cli logs "My Server" --follow --grep ERROR
+kern-cli backup create "My Server" --wait
+kern-cli task run "My Server" nightly-restart
+kern-cli events --follow                     # audit + status transitions
+kern-cli doctor                              # diagnose setup problems
+kern-cli completions zsh > ~/.zfunc/_kern-cli
 ```
+
+Exit codes are scriptable: `0` ok · `1` error · `2` usage · `3` not found ·
+`4` app unreachable · `5` timeout. `--format json|plain|table` and `--color`
+control output; `--json` still works.
 
 The same API is scriptable directly — URL and token are shown under
 Settings → automation & CLI:
@@ -84,8 +97,12 @@ curl -X POST -H "Authorization: Bearer $TOKEN" \
      -d '{"line":"say hello"}' http://127.0.0.1:7442/servers/srv_123/stdin
 ```
 
-Endpoints: `GET /status`, `GET /servers`, `GET /servers/{id}/log?lines=N`,
-`POST /servers/{id}/{start|stop|restart}`, `POST /servers/{id}/stdin`.
+Endpoints (v2): `GET /status`, `GET /servers[?ports=1]`, `GET|POST|PATCH|DELETE /servers[/{id}]`,
+`POST /servers/{id}/{start|stop|restart|install|stdin|backup}`,
+`GET /servers/{id}/{log|metrics|energy|preflight|crash|tasks|backups}`,
+`POST /servers/{id}/tasks/{taskId}/run`, `POST|DELETE /servers/{id}/backups/…`,
+`GET /host/metrics`, `GET /inspect?path=`, `GET|POST|DELETE /plugins…`,
+`GET /audit`, `GET /events?since=&wait=` (long-poll).
 
 ## Notifications, webhooks & log alerts
 

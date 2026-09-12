@@ -44,6 +44,12 @@ pub struct AppSettings {
     /// last remembered window visibility.
     #[serde(default)]
     pub start_hidden_in_tray: bool,
+    /// Animate the tray icon as a live radar: a sweep whose speed follows CPU
+    /// load, one pulsing blip per running server, color by health, and a
+    /// crimson blink on faults. Defaults on; off restores the static status
+    /// dot.
+    #[serde(default = "default_true")]
+    pub tray_radar: bool,
     /// Local electricity price per kWh in the user's currency. Drives the
     /// energy & cost meter (draw × hours × price). Zero disables the meter.
     #[serde(default)]
@@ -420,6 +426,7 @@ fn default_config(app_handle: &AppHandle) -> Result<AppConfig, String> {
             launch_on_login: false,
             close_to_tray: true,
             start_hidden_in_tray: false,
+            tray_radar: true,
             power_price_per_kwh: 0.0,
             machine_watts: default_machine_watts(),
             registry_url: default_registry_url(),

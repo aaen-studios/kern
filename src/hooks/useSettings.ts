@@ -29,6 +29,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   launchOnLogin: false,
   closeToTray: true,
   startHiddenInTray: false,
+  trayRadar: true,
   powerPricePerKwh: 0,
   machineWatts: 120,
   registryUrl: "https://kern.aaenz.no",

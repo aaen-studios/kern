@@ -316,6 +316,13 @@ pub fn update_app_settings(
     app_handle: AppHandle,
     settings: AppSettings,
 ) -> Result<(), String> {
+    // The tray radar reads this atomic on its next tick, so the toggle takes
+    // effect without an app restart.
+    if let Some(control) = app_handle.try_state::<crate::tray_radar::RadarControl>() {
+        control
+            .enabled
+            .store(settings.tray_radar, std::sync::atomic::Ordering::Relaxed);
+    }
     config::with_config_mut(&app_handle, |cfg| {
         cfg.settings = settings;
         Ok(())

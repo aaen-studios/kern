@@ -10,7 +10,7 @@
 //! poll after a launch reads ~0% and corrects on the next — which reads as a
 //! natural spin-up over the first second.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 use serde::Serialize;
@@ -77,60 +77,89 @@ impl MetricsState {
 
         let root = Pid::from_u32(root_pid);
         sys.process(root)?;
+        Some(metrics_for_root(&sys, root, status))
+    }
 
-        let cpus = sys.cpus().len().max(1) as f32;
-        let total_mem = sys.total_memory();
+    /// Bulk variant of [`Self::instance_metrics`]: one process-table refresh
+    /// drives every requested root. Callers that need several instances per
+    /// tick must use this — back-to-back single refreshes would each reset the
+    /// CPU delta window, reading ~0% for all but the first root.
+    pub fn instances_metrics(
+        &self,
+        root_pids: &[u32],
+        status: &str,
+    ) -> HashMap<u32, InstanceMetrics> {
+        let mut sys = self.0.lock().expect("metrics state lock poisoned");
+        sys.refresh_processes(ProcessesToUpdate::All, true);
 
-        // Collect the subtree rooted at `root_pid`. A process belongs to the tree
-        // if walking its parent chain eventually reaches the root; we compute that
-        // by scanning all processes and including any whose ancestor is the root.
-        let mut in_tree: HashSet<Pid> = HashSet::new();
-        in_tree.insert(root);
+        root_pids
+            .iter()
+            .filter_map(|root_pid| {
+                let root = Pid::from_u32(*root_pid);
+                sys.process(root)?;
+                Some((*root_pid, metrics_for_root(&sys, root, status)))
+            })
+            .collect()
+    }
+}
 
-        // Iterate to a fixed point: keep scanning until no new descendants are
-        // found. A single extra pass after each discovery covers trees that branch
-        // more than one level deep per scan — bounded by tree depth, which is tiny.
-        loop {
-            let before = in_tree.len();
-            for (pid, proc) in sys.processes() {
-                if in_tree.contains(pid) {
-                    continue;
-                }
-                if let Some(parent) = proc.parent() {
-                    if in_tree.contains(&parent) {
-                        in_tree.insert(*pid);
-                    }
-                }
+/// CPU + RAM for the process tree rooted at `root`, as a fraction of the
+/// whole machine (CPU normalized by core count, RAM by total memory).
+fn metrics_for_root(sys: &System, root: Pid, status: &str) -> InstanceMetrics {
+    let cpus = sys.cpus().len().max(1) as f32;
+    let total_mem = sys.total_memory();
+    let in_tree = collect_tree(sys, root);
+
+    let mut cpu_sum = 0f32;
+    let mut mem_sum: u64 = 0;
+    for pid in &in_tree {
+        if let Some(proc) = sys.process(*pid) {
+            // cpu_usage() is summed across all cores, so it can exceed 100 on
+            // a multi-core box. Dividing by the core count yields a 0..100
+            // single-core-equivalent before the final /100 → 0..1.
+            cpu_sum += proc.cpu_usage();
+            mem_sum += proc.memory();
+        }
+    }
+
+    let cpu = (cpu_sum / cpus / 100.0).clamp(0.0, 1.0);
+    let ram = if total_mem > 0 {
+        (mem_sum as f32 / total_mem as f32).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+
+    InstanceMetrics {
+        cpu,
+        ram,
+        status: status.to_string(),
+    }
+}
+
+/// Collects the set of PIDs whose ancestor chain reaches `root`, including
+/// `root` itself.
+fn collect_tree(sys: &System, root: Pid) -> HashSet<Pid> {
+    let mut in_tree: HashSet<Pid> = HashSet::new();
+    in_tree.insert(root);
+
+    // Iterate to a fixed point: keep scanning until no new descendants are
+    // found. A single extra pass after each discovery covers trees that branch
+    // more than one level deep per scan — bounded by tree depth, which is tiny.
+    loop {
+        let before = in_tree.len();
+        for (pid, proc) in sys.processes() {
+            if in_tree.contains(pid) {
+                continue;
             }
-            if in_tree.len() == before {
-                break;
+            if let Some(parent) = proc.parent() {
+                if in_tree.contains(&parent) {
+                    in_tree.insert(*pid);
+                }
             }
         }
-
-        let mut cpu_sum = 0f32;
-        let mut mem_sum: u64 = 0;
-        for pid in &in_tree {
-            if let Some(proc) = sys.process(*pid) {
-                // cpu_usage() is summed across all cores, so it can exceed 100 on
-                // a multi-core box. Dividing by the core count yields a 0..100
-                // single-core-equivalent before the final /100 → 0..1.
-                cpu_sum += proc.cpu_usage();
-                mem_sum += proc.memory();
-            }
+        if in_tree.len() == before {
+            return in_tree;
         }
-
-        let cpu = (cpu_sum / cpus / 100.0).clamp(0.0, 1.0);
-        let ram = if total_mem > 0 {
-            (mem_sum as f32 / total_mem as f32).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-
-        Some(InstanceMetrics {
-            cpu,
-            ram,
-            status: status.to_string(),
-        })
     }
 }
 

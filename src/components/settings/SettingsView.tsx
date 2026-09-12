@@ -43,6 +43,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     key:
       | "closeToTray"
       | "startHiddenInTray"
+      | "trayRadar"
       | "webRemoteEnabled"
       | "nativeNotifications"
       | "webhookEnabled"
@@ -147,6 +148,13 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                   description="Closing the window hides it to the tray instead of quitting; servers keep running. Use the tray menu's Quit to fully exit."
                   checked={settings.closeToTray}
                   onChange={(v) => void handleSetting("closeToTray", v)}
+                />
+                <Divider />
+                <ToggleRow
+                  label="Live radar tray icon"
+                  description="Animate the tray icon as a mini radar: sweep speed follows CPU load, one pulsing blip per running server, colors show health, and a fault blinks crimson."
+                  checked={settings.trayRadar !== false}
+                  onChange={(v) => void handleSetting("trayRadar", v)}
                 />
               </div>
               <p className="mt-2 text-[11px] text-zinc-600">

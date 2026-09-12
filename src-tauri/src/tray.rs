@@ -264,15 +264,18 @@ pub fn refresh_menu(app: &AppHandle) {
     }
     let _ = tray.set_tooltip(Some(tooltip));
 
-    // Dynamic icon state: alert > running > idle.
-    let state = if has_error {
-        TrayState::Alert
-    } else if count > 0 {
-        TrayState::Running
-    } else {
-        TrayState::Idle
-    };
-    set_state_icon(&tray, state);
+    // Dynamic icon state: alert > running > idle. While the live radar is
+    // animating it owns the icon — don't stomp its current frame.
+    if !crate::tray_radar::is_animating(app) {
+        let state = if has_error {
+            TrayState::Alert
+        } else if count > 0 {
+            TrayState::Running
+        } else {
+            TrayState::Idle
+        };
+        set_state_icon(&tray, state);
+    }
 }
 
 /// Tray icon tint states.

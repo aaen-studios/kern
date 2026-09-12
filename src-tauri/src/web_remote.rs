@@ -439,27 +439,71 @@ fn route(handle: &AppHandle, method: &str, path: &str) -> (u16, &'static str, St
 }
 
 pub(crate) fn servers_json(handle: &AppHandle) -> String {
+    servers_json_opts(handle, false)
+}
+
+/// Server list JSON. `include_ports` adds a live port scan per running
+/// instance (a netstat/ss call each), so it is opt-in — the automation API
+/// exposes it via `GET /servers?ports=1` for `kern-cli list --ports`.
+pub(crate) fn servers_json_opts(handle: &AppHandle, include_ports: bool) -> String {
     let cfg = match config::load_config(handle) {
         Ok(c) => c,
         Err(e) => return err(&e),
     };
     let metrics_state: tauri::State<'_, MetricsState> = handle.state();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    // One process-table refresh drives every running instance (per-instance
+    // refreshes would reset the CPU delta window and read ~0% for all but the
+    // first). Metrics are keyed by pid.
+    let running_pids: Vec<u32> = cfg
+        .servers
+        .iter()
+        .filter(|(id, _)| process::is_running(handle, id))
+        .filter_map(|(id, _)| process::pid_for(handle, id))
+        .collect();
+    let all_metrics = metrics_state.instances_metrics(&running_pids, "running");
+
     let mut out = Vec::new();
     for (id, s) in &cfg.servers {
         let running = process::is_running(handle, id);
+        let adopted = process::is_adopted(handle, id);
         let pid = process::pid_for(handle, id);
         let metrics = pid
-            .and_then(|pid| metrics_state.instance_metrics(pid, &s.status))
+            .and_then(|pid| all_metrics.get(&pid))
             .map(|m| serde_json::json!({ "cpu": m.cpu, "ram": m.ram }));
+        let uptime = pid
+            .and_then(process::process_start_time)
+            .map(|started| now.saturating_sub(started));
+        let ports = if include_ports && running {
+            tauri::async_runtime::block_on(crate::commands::get_instance_ports(
+                handle.clone(),
+                id.clone(),
+            ))
+            .ok()
+            .and_then(|p| serde_json::to_value(p).ok())
+            .unwrap_or(serde_json::Value::Null)
+        } else {
+            serde_json::Value::Null
+        };
         out.push(serde_json::json!({
             "id": id,
             "name": s.name,
             "type": s.server_type,
             "group": s.group,
+            "tags": s.tags,
             "status": s.status,
             "running": running,
+            "adopted": adopted,
             "orphaned": s.is_orphaned,
+            "autoStart": s.auto_start,
+            "pid": pid,
+            "uptimeSecs": uptime,
             "metrics": metrics,
+            "ports": ports,
         }));
     }
     serde_json::json!({ "servers": out }).to_string()

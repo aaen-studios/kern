@@ -2,6 +2,7 @@
 
 mod audit;
 mod automation;
+mod automation_api;
 mod commands;
 mod config;
 mod crash;
@@ -23,6 +24,7 @@ mod seed;
 mod snapshots;
 mod sync;
 mod tray;
+mod tray_radar;
 mod ui_state;
 mod watcher;
 mod watchdog;
@@ -125,6 +127,7 @@ pub fn run() {
         .manage(FrontendReady::default())
         .manage(logwatch::LogAlertState::default())
         .manage(automation::AutomationState::default())
+        .manage(tray_radar::RadarControl::default())
         .setup(|app| {
             let handle = app.handle().clone();
 
@@ -222,6 +225,10 @@ pub fn run() {
             handle.listen("kern://running-set-changed", move |_event| {
                 tray::refresh_menu(&refresh_handle);
             });
+
+            // Live tray radar: repaints the tray icon from the same metrics
+            // pipeline (sweep speed follows CPU, one blip per running server).
+            tray_radar::spawn(&handle);
 
             // Auto-start any instances flagged `autoStart`. Non-orphaned only,
             // best-effort per server so one failure doesn't block the rest.

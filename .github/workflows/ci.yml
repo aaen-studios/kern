@@ -73,7 +73,7 @@ jobs:
         working-directory: src-tauri
         run: |
           set +e
-          cargo clippy --lib -- -D warnings 2>&1 | tee clippy.log
+          cargo clippy --lib --bin kern-cli -- -D warnings 2>&1 | tee clippy.log
           code=${PIPESTATUS[0]}
           if [ "$code" -ne 0 ]; then
             # Surface the error as a check annotation (job logs need auth).
@@ -87,7 +87,7 @@ jobs:
         working-directory: src-tauri
         run: |
           set +e
-          cargo test --lib 2>&1 | tee test.log
+          cargo test --lib --bin kern-cli 2>&1 | tee test.log
           code=${PIPESTATUS[0]}
           if [ "$code" -ne 0 ]; then
             MSG=$(grep -E 'FAILED|panicked|error\[|failures:|assertion' test.log | head -n 30 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g; s/\r//g')
@@ -109,3 +109,7 @@ jobs:
       - name: End-to-end stop verification
         if: runner.os == 'Windows'
         run: bun run e2e:stop
+
+      - name: End-to-end CLI verification
+        if: runner.os == 'Windows'
+        run: bun run e2e:cli
