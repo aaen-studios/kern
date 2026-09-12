@@ -13,10 +13,14 @@ use std::path::{Path, PathBuf};
 
 /// Resolves the repo `plugins/` source directory.
 ///
-/// In dev, `CARGO_MANIFEST_DIR` points at `src-tauri/`, so the repo plugins
-/// live one level up. In release builds the macro is empty and this returns
-/// None, making seeding a no-op.
+/// `CARGO_MANIFEST_DIR` is a compile-time value that is baked into release
+/// binaries too, so this is gated on debug builds: a release install must
+/// never overwrite the user's installed plugins from a path that merely
+/// happened to exist on the build machine.
 fn source_plugins_dir() -> Option<PathBuf> {
+    if !cfg!(debug_assertions) {
+        return None; // release build — never seed
+    }
     let dir = option_env!("CARGO_MANIFEST_DIR")?;
     let path = Path::new(dir).join("..").join("plugins");
     path.is_dir().then_some(path)

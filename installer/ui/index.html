@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>kern setup</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <div class="frame">
+      <!-- Custom frameless titlebar (mirrors the app's shell) -->
+      <header class="titlebar" data-tauri-drag-region>
+        <div class="brand" data-tauri-drag-region>
+          <span class="brand-icon">
+            <img src="/assets/icon.png" alt="" draggable="false" />
+            <span class="signal-dot" id="signalDot"></span>
+          </span>
+          <span class="wordmark" data-tauri-drag-region>kern setup</span>
+          <span class="tag" id="version"></span>
+        </div>
+
+        <div class="status" id="statusText" data-tauri-drag-region>ready</div>
+
+        <div class="controls">
+          <button id="minimize" aria-label="minimize" title="minimize">
+            <span class="glyph-min"></span>
+          </button>
+          <button id="close" class="close" aria-label="close" title="close">
+            <span class="glyph-close">×</span>
+          </button>
+        </div>
+
+        <!-- Thin matrix lane: installation progress as a signal trail -->
+        <div class="lane">
+          <div class="lane-fill" id="laneFill"></div>
+        </div>
+      </header>
+
+      <main>
+        <section id="intro">
+          <p class="lead">
+            Installs the kern server manager for this user. No administrator
+            rights required.
+          </p>
+          <p class="note">
+            Upgrading an existing install closes the running kern; your servers
+            keep running and are re-adopted on the next launch.
+          </p>
+
+          <label class="field">
+            <span>Install location</span>
+            <input id="installDir" type="text" spellcheck="false" />
+          </label>
+
+          <label class="check" id="rowDesktop">
+            <input id="desktopShortcut" type="checkbox" checked />
+            <span>Create a desktop shortcut</span>
+          </label>
+
+          <label class="check" id="rowLaunch">
+            <input id="launchAfter" type="checkbox" checked />
+            <span>Launch kern when setup finishes</span>
+          </label>
+
+          <p class="warn" id="payloadWarning" hidden>
+            This build has no application payload embedded. Rebuild the
+            installer after building kern (see scripts/build-installer.mjs).
+          </p>
+        </section>
+
+        <section id="progress" hidden>
+          <ul id="steps"></ul>
+          <p class="current-action" id="currentAction" hidden>
+            <span class="caret">▸</span><span id="currentActionText"></span>
+          </p>
+        </section>
+
+        <section id="result" hidden>
+          <p id="resultText"></p>
+          <p class="countdown" id="countdown" hidden></p>
+        </section>
+      </main>
+
+      <footer>
+        <button id="cancel" class="secondary">cancel</button>
+        <button id="install" class="primary">install</button>
+        <button id="close2" class="primary" hidden>close</button>
+      </footer>
+
+      <!-- Slow scanline sweep while installing -->
+      <div class="scanline" id="scanline" aria-hidden="true"></div>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

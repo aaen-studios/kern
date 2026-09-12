@@ -6,6 +6,8 @@ import {
   useRef,
   createContext,
   useContext,
+  lazy,
+  Suspense,
   type RefObject,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -15,14 +17,27 @@ import { ServerList } from "./components/servers/ServerList";
 import { ServerForm } from "./components/servers/ServerForm";
 import { ServerDetailView } from "./components/servers/ServerDetailView";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
+import { ImportServerDialog } from "./components/servers/ImportServerDialog";
 import { ErrorBoundary } from "./components/ui/ErrorBoundary";
-import { PluginManager } from "./components/plugins/PluginManager";
-import { SettingsView } from "./components/settings/SettingsView";
 import { useServers } from "./hooks/useServers";
 import { useLiveStatus } from "./hooks/useLiveStatus";
 import { UiStateProvider, useUiState } from "./hooks/useUiState";
 import { SidebarItemRegistryProvider } from "./hooks/useSidebarItems";
 import { ToastProvider, ToastViewport, useToast } from "./hooks/useToast";
+import { useNotifications } from "./hooks/useNotifications";
+import { CommandPalette } from "./components/layout/CommandPalette";
+
+// Heavier views are code-split: their chunks load the first time the user opens
+// them, keeping the initial bundle small.
+const PluginManager = lazy(() =>
+  import("./components/plugins/PluginManager").then((m) => ({ default: m.PluginManager })),
+);
+const SettingsView = lazy(() =>
+  import("./components/settings/SettingsView").then((m) => ({ default: m.SettingsView })),
+);
+const FleetView = lazy(() =>
+  import("./components/servers/FleetView").then((m) => ({ default: m.FleetView })),
+);
 import type { NewServerInput, ServerInstance, SortPref } from "./types/server";
 
 type View =
@@ -31,7 +46,8 @@ type View =
   | { kind: "create" }
   | { kind: "edit"; server: ServerInstance }
   | { kind: "plugins" }
-  | { kind: "settings" };
+  | { kind: "settings" }
+  | { kind: "fleet" };
 
 /* ─── Instance sorting ─────────────────────────────────────────────────── */
 
@@ -47,7 +63,8 @@ const STATUS_RANK: Record<ServerInstance["status"], number> = {
   stopping: 2,
   installing: 3,
   stopped: 4,
-  error: 5,
+  "stopped-forced": 5,
+  error: 6,
 };
 
 /** Sort a copy of the server array in place according to the given preference. */
@@ -110,12 +127,20 @@ export default function App() {
   );
 }
 
+/** Suspense fallback for code-split views. */
+function ViewLoading({ label }: { label: string }) {
+  return (
+    <div className="h-full flex items-center justify-center">
+      <p className="text-[11px] text-zinc-600">loading {label}…</p>
+    </div>
+  );
+}
+
 /**
  * Inner app component — owns all the real logic. Reads persisted UI state
  * from the context and syncs view/selection changes back to it.
  */
-function AppInner() {
-  const {
+function AppInner() {  const {
     servers,
     loading,
     error,
@@ -128,6 +153,7 @@ function AppInner() {
   const { uiState, setView, setSortPreference } = useUiState();
   const bridgeRef = useContext(SelectedIdBridgeContext);
   const { notify } = useToast();
+  const { push: pushNotification } = useNotifications();
 
   // Bridge the servers-list hook's local error into the global toast channel
   // so it persists across navigation instead of vanishing on view change.
@@ -147,6 +173,15 @@ function AppInner() {
   useEffect(() => {
     const unlisten = listen<string>("kern://open-install", (event) => {
       const path = event.payload;
+      if (path) {
+        setDeepLinkedKernPath(path);
+        setViewLocal({ kind: "plugins" });
+      }
+    });
+    // Cold start (app launched by double-clicking a .kern/kern:// link): the
+    // event fires before this listener exists, so the backend stashed the
+    // target. Warm starts keep arriving through the event above.
+    void invoke<string | null>("take_pending_deep_link").then((path) => {
       if (path) {
         setDeepLinkedKernPath(path);
         setViewLocal({ kind: "plugins" });
@@ -195,35 +230,56 @@ function AppInner() {
   const [restored, setRestored] = useState(false);
 
   // Global event listeners: health alerts + backup completions from the
-  // background scheduler → surface as toasts so they persist across navigation.
+  // background scheduler, and backend notifications (watchdog / schedules /
+  // plugins) → persisted notification center + toast.
   useEffect(() => {
     let unlistenAlert: (() => void) | undefined;
     let unlistenBackup: (() => void) | undefined;
+    let unlistenNotification: (() => void) | undefined;
     (async () => {
       unlistenAlert = await listen<{
         id: string; name: string; metric: string; value: number; threshold: number;
       }>("kern://health-alert", (e) => {
-        const { name, metric, value, threshold } = e.payload;
-        notify({
+        const { id, name, metric, value, threshold } = e.payload;
+        const message = `${Math.round(value * 100)}% (over ${Math.round(threshold * 100)}% threshold)`;
+        notify({ kind: "warn", title: `${name} — ${metric} high`, message });
+        pushNotification({
           kind: "warn",
           title: `${name} — ${metric} high`,
-          message: `${Math.round(value * 100)}% (over ${Math.round(threshold * 100)}% threshold)`,
+          message,
+          serverId: id,
         });
       });
       unlistenBackup = await listen<{ id: string; at: number }>("kern://backup-completed", (e) => {
         const server = serversLive.find((s) => s.id === e.payload.id);
-        notify({
+        const message = server?.name ?? e.payload.id;
+        notify({ kind: "success", title: "Backup saved", message });
+        pushNotification({
           kind: "success",
           title: "Backup saved",
-          message: server?.name ?? e.payload.id,
+          message,
+          serverId: e.payload.id,
+          atSeconds: e.payload.at,
         });
+      });
+      unlistenNotification = await listen<{
+        kind: "info" | "success" | "warn" | "error";
+        title: string;
+        message?: string;
+        serverId?: string;
+        at?: number;
+      }>("kern://notification", (e) => {
+        const { kind, title, message, serverId, at } = e.payload;
+        notify({ kind, title, message });
+        pushNotification({ kind, title, message, serverId, atSeconds: at });
       });
     })();
     return () => {
       unlistenAlert?.();
       unlistenBackup?.();
+      unlistenNotification?.();
     };
-  }, [notify, serversLive]);
+  }, [notify, pushNotification, serversLive]);
 
   // Restore persisted view/selection once servers are loaded.
   useEffect(() => {
@@ -242,6 +298,8 @@ function AppInner() {
       setViewLocal({ kind: "plugins" });
     } else if (savedView === "settings") {
       setViewLocal({ kind: "settings" });
+    } else if (savedView === "fleet") {
+      setViewLocal({ kind: "fleet" });
     } else {
       setViewLocal({ kind: "list" });
     }
@@ -276,6 +334,7 @@ function AppInner() {
 
   // Confirmation dialog state — tracks the instance id pending deletion.
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
   const pendingDelete = useMemo(
     () => serversLive.find((s) => s.id === pendingDeleteId) ?? null,
     [serversLive, pendingDeleteId],
@@ -315,6 +374,8 @@ function AppInner() {
       path: input.path,
       userOverrides: input.userOverrides,
       autoStart: input.autoStart,
+      group: input.group,
+      tags: input.tags,
     });
     setViewLocal({ kind: "detail" });
     persistView("detail", selected.id);
@@ -353,6 +414,9 @@ function AppInner() {
 
   function cancelDelete() {
     setPendingDeleteId(null);
+    // Reset the opt-in too — otherwise the next delete confirmation would
+    // wipe the folder even though the checkbox appears unchecked.
+    setDeleteFolder(false);
   }
 
   // After a launch/stop, the persisted status changed — reload the registry so
@@ -384,6 +448,8 @@ function AppInner() {
       onNavigatePlugins={() => navigate("plugins")}
       showSettings={view.kind === "settings"}
       onNavigateSettings={() => navigate("settings")}
+      showFleet={view.kind === "fleet"}
+      onNavigateFleet={() => navigate("fleet")}
     >
       <ErrorBoundary>
         {view.kind === "detail" && selected ? (
@@ -409,6 +475,7 @@ function AppInner() {
                 onDelete={handleDelete}
                 onEdit={handleEdit}
                 onAdd={() => navigate("create")}
+                onImport={() => setImportOpen(true)}
                 onSelect={handleSelect}
                 sortPreference={uiState.sortPreference}
                 onSortChange={setSortPreference}
@@ -433,15 +500,30 @@ function AppInner() {
             )}
 
             {view.kind === "plugins" && (
-              <PluginManager
-                key="plugins"
-                onBack={() => navigate("list")}
-                preselectedKernPath={deepLinkedKernPath}
-              />
+              <Suspense fallback={<ViewLoading label="plugins" />}>
+                <PluginManager
+                  key="plugins"
+                  onBack={() => navigate("list")}
+                  preselectedKernPath={deepLinkedKernPath}
+                />
+              </Suspense>
             )}
 
             {view.kind === "settings" && (
-              <SettingsView key="settings" onBack={() => navigate("list")} />
+              <Suspense fallback={<ViewLoading label="settings" />}>
+                <SettingsView key="settings" onBack={() => navigate("list")} />
+              </Suspense>
+            )}
+
+            {view.kind === "fleet" && (
+              <Suspense fallback={<ViewLoading label="fleet" />}>
+                <FleetView
+                  key="fleet"
+                  servers={serversSorted}
+                  onSelect={handleSelect}
+                  onRegistryChanged={handleStatusChange}
+                />
+              </Suspense>
             )}
           </div>
         )}
@@ -463,6 +545,23 @@ function AppInner() {
         variant="danger"
         onConfirm={confirmDelete}
         onCancel={cancelDelete}
+      />
+      {/* Import an existing server folder (nothing is moved — the instance
+          manages the folder in place). */}
+      <ImportServerDialog
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onCreated={async (server) => {
+          await reload();
+          handleSelect(server.id);
+        }}
+      />
+      {/* Ctrl+K command palette — navigation + lifecycle from the keyboard. */}
+      <CommandPalette
+        servers={serversSorted}
+        onSelectServer={handleSelect}
+        onNavigate={navigate}
+        onRegistryChanged={handleStatusChange}
       />
       {/* Global toast stack — fixed top-right, overlays all views, persists
           across navigation and survives view crashes (lives outside the

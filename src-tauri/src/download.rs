@@ -10,10 +10,54 @@
 
 use std::fs::File;
 use std::io::{Read, BufReader, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
+
+use crate::{config, paths};
+
+/// Hard cap on a single download (2 GiB). Guards against runaway downloads.
+const MAX_DOWNLOAD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+/// Global timeout for a download command.
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+/// Global timeout for small metadata/JSON requests.
+const JSON_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Only https (or explicit loopback http for local development) is allowed.
+/// Blocks `file://`, `data:`, and SSRF against arbitrary LAN hosts.
+fn is_allowed_url(url: &str) -> bool {
+    let lower = url.trim().to_ascii_lowercase();
+    lower.starts_with("https://")
+        || lower.starts_with("http://127.0.0.1")
+        || lower.starts_with("http://localhost")
+        || lower.starts_with("http://[::1]")
+}
+
+/// Refuses download destinations outside the app data dir, the system temp
+/// dir, or a registered server directory. A plugin must not be able to drop a
+/// file into the Startup folder or anywhere else in the user profile.
+pub(crate) fn ensure_dest_allowed(app_handle: &AppHandle, dest: &Path) -> Result<(), String> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if let Ok(base) = config::config_dir(app_handle) {
+        roots.push(base);
+    }
+    roots.push(std::env::temp_dir());
+    if let Ok(cfg) = config::load_config(app_handle) {
+        for server in cfg.servers.values() {
+            roots.push(PathBuf::from(&server.path));
+        }
+    }
+    if roots.iter().any(|root| paths::is_within(root, dest)) {
+        Ok(())
+    } else {
+        Err(format!(
+            "refusing to write download outside the app data, temp, or server directories: '{}'",
+            dest.display()
+        ))
+    }
+}
 
 /// Progress payload emitted as `download:<progress_id>:progress`.
 #[derive(Debug, Clone, Serialize)]
@@ -42,7 +86,18 @@ pub struct DownloadProgress {
 /// disk write failures. The destination file is created/truncated on open
 /// and left in a partial state on failure (callers should clean up).
 #[tauri::command]
-pub fn download_url(
+pub async fn download_url(
+    app_handle: AppHandle,
+    url: String,
+    dest: String,
+    progress_id: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || download_url_blocking(app_handle, url, dest, progress_id))
+        .await
+        .map_err(|e| format!("download task failed: {e}"))?
+}
+
+fn download_url_blocking(
     app_handle: AppHandle,
     url: String,
     dest: String,
@@ -50,12 +105,19 @@ pub fn download_url(
 ) -> Result<(), String> {
     let dest_path = Path::new(&dest);
 
-    // Open the destination file (create/truncate).
-    let mut file =
-        File::create(dest_path).map_err(|e| format!("failed to create '{}': {e}", dest_path.display()))?;
+    if !is_allowed_url(&url) {
+        return Err(format!(
+            "refusing to download from '{url}' (only https is allowed)"
+        ));
+    }
+    ensure_dest_allowed(&app_handle, dest_path)?;
 
-    // Build the HTTP request.
+    // Build the HTTP request before touching the destination, so a failed
+    // request doesn't truncate an existing file.
     let resp = ureq::get(&url)
+        .config()
+        .timeout_global(Some(DOWNLOAD_TIMEOUT))
+        .build()
         .call()
         .map_err(|e| format!("HTTP request failed for '{url}': {e}"))?;
 
@@ -72,6 +134,15 @@ pub fn download_url(
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse().ok())
         .unwrap_or(0);
+    if total > MAX_DOWNLOAD_BYTES {
+        return Err(format!(
+            "download too large ({total} bytes) — refusing to write '{dest}'"
+        ));
+    }
+
+    // Open the destination file (create/truncate).
+    let mut file =
+        File::create(dest_path).map_err(|e| format!("failed to create '{}': {e}", dest_path.display()))?;
 
     let event_name = format!("download:{progress_id}:progress");
 
@@ -85,12 +156,21 @@ pub fn download_url(
         match reader.read(&mut buf) {
             Ok(0) => break, // EOF
             Ok(n) => {
+                bytes += n as u64;
+                if bytes > MAX_DOWNLOAD_BYTES {
+                    drop(file);
+                    let _ = std::fs::remove_file(dest_path);
+                    return Err(format!(
+                        "download exceeded the {MAX_DOWNLOAD_BYTES} byte limit — aborted '{dest}'"
+                    ));
+                }
                 file.write_all(&buf[..n])
                     .map_err(|e| format!("write error to '{}': {e}", dest_path.display()))?;
-                bytes += n as u64;
                 let _ = app_handle.emit(&event_name, DownloadProgress { bytes, total });
             }
             Err(e) => {
+                drop(file);
+                let _ = std::fs::remove_file(dest_path);
                 return Err(format!("read error from '{url}': {e}"));
             }
         }
@@ -115,7 +195,13 @@ pub fn download_url(
 /// Supported runtimes: vanilla, paper, purpur, fabric, forge, neoforge, quilt.
 /// Unknown runtimes fall back to the vanilla (Mojang) manifest.
 #[tauri::command]
-pub fn fetch_mc_versions(runtime: String) -> Result<Vec<String>, String> {
+pub async fn fetch_mc_versions(runtime: String) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || fetch_mc_versions_blocking(runtime))
+        .await
+        .map_err(|e| format!("version fetch task failed: {e}"))?
+}
+
+fn fetch_mc_versions_blocking(runtime: String) -> Result<Vec<String>, String> {
     match runtime.as_str() {
         "vanilla" => fetch_vanilla_versions(false),
         "paper" => fetch_paper_versions(),
@@ -131,6 +217,9 @@ pub fn fetch_mc_versions(runtime: String) -> Result<Vec<String>, String> {
 /// Generic JSON GET helper — parses the response body as `serde_json::Value`.
 fn get_json(url: &str) -> Result<serde_json::Value, String> {
     ureq::get(url)
+        .config()
+        .timeout_global(Some(JSON_TIMEOUT))
+        .build()
         .call()
         .map_err(|e| format!("HTTP request failed for '{url}': {e}"))?
         .body_mut()
@@ -148,7 +237,7 @@ fn version_parts(v: &str) -> Vec<u64> {
 }
 
 /// Sorts version strings newest-first by comparing numeric parts.
-fn sort_newest_first(versions: &mut Vec<String>) {
+fn sort_newest_first(versions: &mut [String]) {
     versions.sort_by(|a, b| {
         let ap = version_parts(a);
         let bp = version_parts(b);
@@ -260,7 +349,7 @@ fn fetch_forge_versions() -> Result<Vec<String>, String> {
             }
         })
         .collect();
-    out.sort_by(|a, b| a.cmp(b));
+    out.sort();
     out.dedup();
     sort_newest_first(&mut out);
     Ok(out)
@@ -278,7 +367,13 @@ fn fetch_forge_versions() -> Result<Vec<String>, String> {
 /// given MC version, so the installer can surface a clean "no Forge version"
 /// message instead of a generic network error.
 #[tauri::command]
-pub fn resolve_forge_version(mc_version: String) -> Result<Option<String>, String> {
+pub async fn resolve_forge_version(mc_version: String) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || resolve_forge_version_blocking(mc_version))
+        .await
+        .map_err(|e| format!("forge resolution task failed: {e}"))?
+}
+
+fn resolve_forge_version_blocking(mc_version: String) -> Result<Option<String>, String> {
     let data =
         get_json("https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json")?;
     let promos = data["promos"]

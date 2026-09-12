@@ -16,6 +16,8 @@ interface AppShellProps {
   onNavigatePlugins: () => void;
   showSettings: boolean;
   onNavigateSettings: () => void;
+  showFleet: boolean;
+  onNavigateFleet: () => void;
   children: ReactNode;
 }
 
@@ -36,12 +38,14 @@ export function AppShell({
   onNavigatePlugins,
   showSettings,
   onNavigateSettings,
+  showFleet,
+  onNavigateFleet,
   children,
 }: AppShellProps) {
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-bg-core">
       <UpdateBanner />
-      <TitleBar onHome={onHome} />
+      <TitleBar onHome={onHome} onOpenServer={onSelect} />
       <div className="flex flex-1 min-h-0">
         <Sidebar
           servers={servers}
@@ -54,6 +58,8 @@ export function AppShell({
           onNavigatePlugins={onNavigatePlugins}
           showSettings={showSettings}
           onNavigateSettings={onNavigateSettings}
+          showFleet={showFleet}
+          onNavigateFleet={onNavigateFleet}
         />
         <main className="flex-1 min-w-0 overflow-hidden flex flex-col">{children}</main>
       </div>

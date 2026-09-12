@@ -36,9 +36,14 @@
     -moz-osx-font-smoothing: grayscale;
   }
 
-  /* Remove default focus ring styling in favor of outline-only accents */
+  /* Mouse focus stays unobtrusive; keyboard focus is always visible. */
   *:focus {
     outline: none;
+  }
+
+  *:focus-visible {
+    outline: 1px solid var(--color-signal-high);
+    outline-offset: 1px;
   }
 }
 
@@ -125,8 +130,17 @@
   to   { opacity: 1; transform: translateX(0); }
 }
 
-/* Thin custom scrollbars to match the high-density aesthetic */
-::-webkit-scrollbar {
+/*
+ * Terminal log lines: skip rendering work for offscreen lines while keeping
+ * an estimated height so the scrollbar stays stable. Chromium-only; other
+ * engines render normally.
+ */
+.log-line {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 18px;
+}
+
+/* Thin custom scrollbars to match the high-density aesthetic */::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }

@@ -124,6 +124,8 @@ interface CodeEditorProps {
   onCursorPosition?: (line: number, column: number) => void;
   path?: string;
   readOnly?: boolean;
+  /** When set/changed, reveal and focus this 1-based line. */
+  gotoLine?: number | null;
 }
 
 /**
@@ -144,6 +146,7 @@ export function CodeEditor({
   onCursorPosition,
   path,
   readOnly = false,
+  gotoLine,
 }: CodeEditorProps) {
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
   const modelRef = useRef<editor.ITextModel | null>(null);
@@ -211,6 +214,18 @@ export function CodeEditor({
       editorRef.current = null;
     };
   }, []);
+
+  // Jump to a requested line (search result / go-to-line). Also runs after
+  // mount, so opening a file directly at a match works on the first paint.
+  useEffect(() => {
+    if (gotoLine == null) return;
+    const ed = editorRef.current;
+    if (!ed) return;
+    const line = Math.max(1, gotoLine);
+    ed.revealLineInCenter(line);
+    ed.setPosition({ lineNumber: line, column: 1 });
+    ed.focus();
+  }, [gotoLine]);
 
   return (
     <Editor

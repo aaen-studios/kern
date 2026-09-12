@@ -6,6 +6,7 @@
  */
 
 import type { ServerInstance } from "./server";
+import type { PLUGIN_EVENTS } from "./plugin-events";
 
 /**
  * A tab contributed by a plugin to the server detail view.
@@ -22,6 +23,10 @@ export interface PluginTab {
    * Used by PluginTabContent to inject styles into the tab's Shadow Root.
    */
   cssUrl?: string;
+  /** Owning plugin id — set automatically by PluginBoot. */
+  pluginId?: string;
+  /** Permissions granted to the owning plugin — set automatically by PluginBoot. */
+  permissions?: readonly string[];
   /**
    * Render the tab's UI into the given mount point element.
    * The mount point is inside an open Shadow Root for style isolation.
@@ -78,10 +83,28 @@ export interface SidebarItem {
  * and sidebar items.
  */
 export interface HostAPI {
-  /** Call a Tauri backend command. */
+  /**
+   * Call a Tauri backend command. Only commands covered by the plugin's
+   * declared manifest permissions are forwarded; anything else throws.
+   */
   invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
+  /** Permissions granted to this plugin by its manifest. */
+  permissions: readonly string[];
+  /** True when the plugin declared the given permission. */
+  hasPermission: (permission: string) => boolean;
   /** Absolute path to the server instance directory. */
   serverPath: string;
+  /**
+   * Show a toast and record the message in the notification center. Always
+   * available (no permission required).
+   */
+  notify: (
+    kind: "info" | "success" | "warn" | "error",
+    title: string,
+    message?: string,
+  ) => void;
+  /** Typed event-name helpers for `listen` (see plugin-events.ts). */
+  events: typeof PLUGIN_EVENTS;
   /** Subscribe to a Tauri event. Returns an unlisten function. */
   listen: (
     event: string,

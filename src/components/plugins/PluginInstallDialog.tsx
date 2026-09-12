@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import type { Manifest } from "../../types/manifest";
+import { PERMISSION_LABELS } from "./permissions";
+import { clearPluginManifestCache } from "./PluginBoot";
 
 interface PluginInstallDialogProps {
   isOpen: boolean;
@@ -152,7 +154,7 @@ export function PluginInstallDialog({
       setPreviewManifest(manifest);
     } catch (e) {
       setPreviewManifest(null);
-      // Show error but don't clear selection - user can still try to install
+      setError(`could not read plugin package: ${String(e)}`);
     }
   }
 
@@ -171,6 +173,7 @@ export function PluginInstallDialog({
         // Install from directory
         await invoke("install_plugin", { sourcePath: selectedPath });
       }
+      clearPluginManifestCache();
       onInstalled();
       onClose();
     } catch (e) {
@@ -239,6 +242,24 @@ export function PluginInstallDialog({
             <p className="text-[11px] text-zinc-400 mb-2">
               by {previewManifest.author}
             </p>
+            {previewManifest.permissions && previewManifest.permissions.length > 0 ? (
+              <div className="mb-1">
+                <p className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1">
+                  permissions
+                </p>
+                <ul className="space-y-0.5">
+                  {previewManifest.permissions.map((p) => (
+                    <li key={p} className="text-[11px] text-zinc-400">
+                      • {PERMISSION_LABELS[p] ?? p}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : (
+              <p className="text-[11px] text-zinc-500 mb-1">
+                No capability permissions declared.
+              </p>
+            )}
             {previewManifest.tabs && previewManifest.tabs.length > 0 && (
               <p className="text-[10px] text-zinc-500">
                 {previewManifest.tabs.length} tab(s):{" "}
@@ -247,6 +268,12 @@ export function PluginInstallDialog({
             )}
           </div>
         )}
+
+        {/* Trust notice — plugins are executable code, not data. */}
+        <p className="mb-4 text-[10px] text-amber-500/80 leading-relaxed">
+          Plugins run with the access listed above. Only install packages you
+          trust.
+        </p>
 
         {/* Error feedback */}
         {error && (

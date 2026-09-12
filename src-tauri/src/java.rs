@@ -10,10 +10,15 @@
 //! 3. Standard install directories per platform
 
 use std::path::PathBuf;
-use std::process::Command;
 
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter};
+
+/// Hard cap on a JDK archive download (1.5 GiB; Temurin JDKs are ~200 MB).
+const MAX_JDK_ARCHIVE_BYTES: u64 = 1_500_000_000;
+/// Global timeout for a JDK download.
+const JDK_DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20 * 60);
 
 /// Describes a single Java installation on the system.
 #[derive(Debug, Clone, Serialize)]
@@ -33,7 +38,13 @@ pub struct JavaInstall {
 /// install directories per platform, and optionally scans `<server_path>/jdk/`
 /// for plugin-downloaded JDKs.
 #[tauri::command]
-pub fn detect_java(server_path: Option<String>) -> Vec<JavaInstall> {
+pub async fn detect_java(server_path: Option<String>) -> Vec<JavaInstall> {
+    tauri::async_runtime::spawn_blocking(move || detect_java_blocking(server_path))
+        .await
+        .unwrap_or_default()
+}
+
+fn detect_java_blocking(server_path: Option<String>) -> Vec<JavaInstall> {
     let mut found: Vec<JavaInstall> = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
@@ -89,16 +100,19 @@ pub fn detect_java(server_path: Option<String>) -> Vec<JavaInstall> {
 
 /// Checks the Java version at a given path.
 #[tauri::command]
-pub fn check_java_version(path: String) -> Option<JavaInstall> {
-    let p = std::path::Path::new(&path);
-    check_java_version_inner(p)
+pub async fn check_java_version(path: String) -> Option<JavaInstall> {
+    tauri::async_runtime::spawn_blocking(move || {
+        check_java_version_inner(std::path::Path::new(&path))
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 /// Inner implementation — runs `<java> -version` and parses the output.
 fn check_java_version_inner(java_path: &std::path::Path) -> Option<JavaInstall> {
-    let mut cmd = Command::new(java_path);
+    let mut cmd = crate::process::silent_command(java_path);
     cmd.arg("-version");
-    crate::process::suppress_window(&mut cmd);
     let output = cmd.output().ok()?;
 
     // `java -version` writes its output to stderr.
@@ -296,7 +310,20 @@ struct JavaDownloadProgress {
 ///
 /// `progress_id` is caller-chosen so concurrent downloads don't collide.
 #[tauri::command]
-pub fn download_java(
+pub async fn download_java(
+    app_handle: AppHandle,
+    major: u16,
+    dest_dir: String,
+    progress_id: String,
+) -> Result<JavaInstall, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        download_java_blocking(app_handle, major, dest_dir, progress_id)
+    })
+    .await
+    .map_err(|e| format!("java download task failed: {e}"))?
+}
+
+fn download_java_blocking(
     app_handle: AppHandle,
     major: u16,
     dest_dir: String,
@@ -332,9 +359,16 @@ pub fn download_java(
     let archive_name = package["name"]
         .as_str()
         .ok_or_else(|| format!("Adoptium response missing package name for JDK {major}"))?;
+    let expected_checksum = package["checksum"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let expected_size = package["size"].as_u64().unwrap_or(0);
 
     // 2. Download the archive to a temp file next to the destination.
     let dest_path = PathBuf::from(&dest_dir);
+    crate::download::ensure_dest_allowed(&app_handle, &dest_path)?;
     std::fs::create_dir_all(&dest_path)
         .map_err(|e| format!("failed to create JDK dir '{}': {e}", dest_path.display()))?;
 
@@ -342,6 +376,9 @@ pub fn download_java(
     let event_name = format!("download:{progress_id}:progress");
     {
         let resp = ureq::get(download_link)
+            .config()
+            .timeout_global(Some(JDK_DOWNLOAD_TIMEOUT))
+            .build()
             .call()
             .map_err(|e| format!("JDK download request failed: {e}"))?;
         let status = resp.status();
@@ -355,25 +392,55 @@ pub fn download_java(
             .and_then(|v| v.parse().ok())
             .unwrap_or(0);
 
+        if total > MAX_JDK_ARCHIVE_BYTES || expected_size > MAX_JDK_ARCHIVE_BYTES {
+            return Err(format!(
+                "JDK archive is too large ({expected_size} bytes) — refusing to download"
+            ));
+        }
+
         let mut reader = std::io::BufReader::new(resp.into_body().into_reader());
         let mut file = std::fs::File::create(&archive_path)
             .map_err(|e| format!("failed to create archive '{}': {e}", archive_path.display()))?;
         let mut buf = vec![0u8; 65_536];
         let mut bytes: u64 = 0;
+        let mut hasher = Sha256::new();
         loop {
             match std::io::Read::read(&mut reader, &mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
+                    bytes += n as u64;
+                    if bytes > MAX_JDK_ARCHIVE_BYTES {
+                        drop(file);
+                        let _ = std::fs::remove_file(&archive_path);
+                        return Err("JDK archive exceeded the size limit — aborted".to_string());
+                    }
+                    hasher.update(&buf[..n]);
                     use std::io::Write;
                     file.write_all(&buf[..n])
                         .map_err(|e| format!("write error: {e}"))?;
-                    bytes += n as u64;
                     let _ = app_handle.emit(&event_name, JavaDownloadProgress { bytes, total });
                 }
-                Err(e) => return Err(format!("read error from JDK download: {e}")),
+                Err(e) => {
+                    drop(file);
+                    let _ = std::fs::remove_file(&archive_path);
+                    return Err(format!("read error from JDK download: {e}"));
+                }
             }
         }
         let _ = app_handle.emit(&event_name, JavaDownloadProgress { bytes, total });
+
+        // Integrity: verify the Adoptium-advertised SHA-256 before executing
+        // anything from the archive.
+        if let Some(expected) = &expected_checksum {
+            let actual = format!("{:x}", hasher.finalize());
+            if !actual.eq_ignore_ascii_case(expected) {
+                drop(file);
+                let _ = std::fs::remove_file(&archive_path);
+                return Err(format!(
+                    "checksum mismatch for JDK {major} (expected {expected}, got {actual}) — refusing to extract"
+                ));
+            }
+        }
     }
 
     // 3. Extract the archive.

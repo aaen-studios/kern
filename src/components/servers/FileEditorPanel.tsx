@@ -31,12 +31,14 @@ import { useToast } from "../../hooks/useToast";
 interface FileEditorPanelProps {
   /** Server instance id — scopes all file operations. */
   serverId: string;
+  /** True when the instance enables the file-snapshots feature. */
+  snapshotsEnabled?: boolean;
 }
 
 // Ensure Monaco theme is registered at least once at module level.
 configureMonaco();
 
-export function FileEditorPanel({ serverId }: FileEditorPanelProps) {
+export function FileEditorPanel({ serverId, snapshotsEnabled = false }: FileEditorPanelProps) {
   const {
     // State
     openFiles,
@@ -47,8 +49,10 @@ export function FileEditorPanel({ serverId }: FileEditorPanelProps) {
     tabs,
     activeFileData,
     conflict,
+    gotoLine,
     // Actions
     openFile,
+    openFileAt,
     closeFile,
     setActiveFile,
     saveFile,
@@ -120,6 +124,17 @@ export function FileEditorPanel({ serverId }: FileEditorPanelProps) {
   const [imageBytes, setImageBytes] = useState<string | null>(null);
   const [diffOriginal, setDiffOriginal] = useState<string | null>(null);
   const [viewLoading, setViewLoading] = useState(false);
+
+  // ── File snapshots ────────────────────────────────────────────────────
+  const [showSnapshots, setShowSnapshots] = useState(false);
+  const [snapshots, setSnapshots] = useState<
+    { id: string; at: number; size: number }[]
+  >([]);
+  const [snapshotsBusy, setSnapshotsBusy] = useState(false);
+  const [pendingSnapshotRestore, setPendingSnapshotRestore] = useState<string | null>(null);
+  const [pendingSnapshotDelete, setPendingSnapshotDelete] = useState<string | null>(null);
+  /** Where the diff view's "original" came from. */
+  const [diffSource, setDiffSource] = useState<"backups" | "snapshot">("backups");
 
   /** File extensions that have a read-only preview renderer. */
   const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg"]);
@@ -250,7 +265,7 @@ export function FileEditorPanel({ serverId }: FileEditorPanelProps) {
         .then((b64) => { if (!cancelled) setImageBytes(b64); })
         .catch((e) => { if (!cancelled) console.warn("read_file_bytes failed:", e); })
         .finally(() => { if (!cancelled) setViewLoading(false); });
-    } else if (viewMode === "diff") {
+    } else if (viewMode === "diff" && diffSource === "backups") {
       // Diff: pull the most recent backup that contains this file. list_backups
       // returns newest-first, so the first hit is the latest snapshot.
       setViewLoading(true);
@@ -273,7 +288,7 @@ export function FileEditorPanel({ serverId }: FileEditorPanelProps) {
         .finally(() => { if (!cancelled) setViewLoading(false); });
     }
     return () => { cancelled = true; };
-  }, [viewMode, activeFile, activeFileData?.relPath, serverId]);
+  }, [viewMode, activeFile, activeFileData?.relPath, serverId, diffSource]);
 
   // ── Keyboard shortcuts: Ctrl/Cmd+F to toggle search, Esc to close ───────
   // Both are captured on the *capture* phase but ONLY fire when the Monaco
@@ -361,8 +376,12 @@ export function FileEditorPanel({ serverId }: FileEditorPanelProps) {
   );
 
   const handleOpenFile = useCallback(
-    async (relPath: string) => {
-      await openFile(relPath);
+    async (relPath: string, line?: number | null) => {
+      if (line != null && line > 0) {
+        await openFileAt(relPath, line);
+      } else {
+        await openFile(relPath);
+      }
       const newOpenFiles = Array.from(openFiles.keys());
       if (!openFiles.has(relPath)) {
         newOpenFiles.push(relPath);
@@ -378,29 +397,40 @@ export function FileEditorPanel({ serverId }: FileEditorPanelProps) {
         },
       });
     },
-    [openFile, openFiles, serverId, updateServer, editorUi, expandedPaths, cursorLine, cursorCol],
+    [openFile, openFileAt, openFiles, serverId, updateServer, editorUi, expandedPaths, cursorLine, cursorCol],
   );
 
   const handleCloseFile = useCallback(
     (relPath: string) => {
+      // Close locally and persist the new tab set. Only called once the buffer
+      // is clean (or the save succeeded) so we never discard unsaved edits.
+      const finalize = () => {
+        closeFile(relPath);
+        const newOpenFiles = Array.from(openFiles.keys()).filter((p) => p !== relPath);
+        const newActive =
+          activeFile === relPath ? (newOpenFiles[newOpenFiles.length - 1] ?? null) : activeFile;
+        updateServer(serverId, {
+          editor: {
+            ...editorUi,
+            openFiles: newOpenFiles,
+            activeFile: newActive,
+            expandedPaths: Array.from(expandedPaths),
+            cursorLine,
+            cursorCol,
+          },
+        });
+      };
+
       const file = openFiles.get(relPath);
       if (file?.isDirty) {
-        saveFile(relPath).then(() => closeFile(relPath));
+        // Save first; if it fails (error or conflict) keep the tab open so the
+        // edits aren't lost.
+        void saveFile(relPath).then((ok) => {
+          if (ok) finalize();
+        });
         return;
       }
-      closeFile(relPath);
-      const newOpenFiles = Array.from(openFiles.keys()).filter((p) => p !== relPath);
-      const newActive = activeFile === relPath ? (newOpenFiles[newOpenFiles.length - 1] ?? null) : activeFile;
-      updateServer(serverId, {
-        editor: {
-          ...editorUi,
-          openFiles: newOpenFiles,
-          activeFile: newActive,
-          expandedPaths: Array.from(expandedPaths),
-          cursorLine,
-          cursorCol,
-        },
-      });
+      finalize();
     },
     [openFiles, saveFile, closeFile, activeFile, serverId, updateServer, editorUi, expandedPaths, cursorLine, cursorCol],
   );
@@ -409,6 +439,97 @@ export function FileEditorPanel({ serverId }: FileEditorPanelProps) {
     if (!activeFile) return;
     await saveFile(activeFile);
   }, [activeFile, saveFile]);
+
+  // ── Snapshot actions ───────────────────────────────────────────────────
+  const refreshSnapshots = useCallback(async () => {
+    if (!activeFile) return;
+    setSnapshotsBusy(true);
+    try {
+      setSnapshots(
+        await invoke<{ id: string; at: number; size: number }[]>("list_file_snapshots", {
+          id: serverId,
+          relPath: activeFile,
+        }),
+      );
+    } catch {
+      setSnapshots([]);
+    } finally {
+      setSnapshotsBusy(false);
+    }
+  }, [activeFile, serverId]);
+
+  useEffect(() => {
+    if (showSnapshots && activeFile) void refreshSnapshots();
+  }, [showSnapshots, activeFile, refreshSnapshots]);
+
+  async function takeSnapshot() {
+    if (!activeFile) return;
+    setSnapshotsBusy(true);
+    try {
+      await invoke("snapshot_file", { id: serverId, relPath: activeFile });
+      notify({ kind: "success", title: "Snapshot taken", message: activeFile });
+      await refreshSnapshots();
+    } catch (e) {
+      notify({ kind: "error", title: "Snapshot failed", message: String(e) });
+    } finally {
+      setSnapshotsBusy(false);
+    }
+  }
+
+  async function diffSnapshot(snapshotId: string) {
+    if (!activeFile) return;
+    try {
+      const content = await invoke<string>("read_file_snapshot", {
+        id: serverId,
+        relPath: activeFile,
+        snapshotId,
+      });
+      setDiffOriginal(content);
+      setDiffSource("snapshot");
+      setViewMode("diff");
+      setShowSnapshots(false);
+    } catch (e) {
+      notify({ kind: "error", title: "Could not read snapshot", message: String(e) });
+    }
+  }
+
+  async function restoreSnapshot(snapshotId: string) {
+    if (!activeFile) return;
+    setSnapshotsBusy(true);
+    try {
+      await invoke("restore_file_snapshot", {
+        id: serverId,
+        relPath: activeFile,
+        snapshotId,
+      });
+      await reloadFile(activeFile);
+      notify({ kind: "success", title: "Snapshot restored", message: activeFile });
+      await refreshSnapshots();
+    } catch (e) {
+      notify({ kind: "error", title: "Restore failed", message: String(e) });
+    } finally {
+      setSnapshotsBusy(false);
+      setPendingSnapshotRestore(null);
+    }
+  }
+
+  async function deleteSnapshot(snapshotId: string) {
+    if (!activeFile) return;
+    setSnapshotsBusy(true);
+    try {
+      await invoke("delete_file_snapshot", {
+        id: serverId,
+        relPath: activeFile,
+        snapshotId,
+      });
+      await refreshSnapshots();
+    } catch (e) {
+      notify({ kind: "error", title: "Delete failed", message: String(e) });
+    } finally {
+      setSnapshotsBusy(false);
+      setPendingSnapshotDelete(null);
+    }
+  }
 
   const handleEditorChange = useCallback(
     (value: string | undefined) => {
@@ -647,7 +768,7 @@ export function FileEditorPanel({ serverId }: FileEditorPanelProps) {
                 Preview/diff only make sense for files that have a renderer or
                 a backup to compare against; the toggle stays subtle so the
                 editor-first flow is unchanged for code files. */}
-            {activeFileData && (isPreviewable(activeFileData.language) || isImageFile(activeFileData.relPath)) && (
+            {activeFileData && (isPreviewable(activeFileData.language) || isImageFile(activeFileData.relPath) || snapshotsEnabled) && (
               <div className="flex items-center gap-1 px-3 h-6 border-b border-grid-bounds bg-bg-surface shrink-0">
                 {(["edit", "preview", "diff"] as const).map((m) => {
                   const disabled =
@@ -660,7 +781,10 @@ export function FileEditorPanel({ serverId }: FileEditorPanelProps) {
                     <button
                       key={m}
                       disabled={!available || disabled}
-                      onClick={() => setViewMode(m)}
+                      onClick={() => {
+                        if (m === "diff") setDiffSource("backups");
+                        setViewMode(m);
+                      }}
                       className={`text-[10px] tracking-[0.15em] uppercase transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
                         viewMode === m ? "text-signal-high" : "text-zinc-600 hover:text-zinc-300"
                       }`}
@@ -669,7 +793,119 @@ export function FileEditorPanel({ serverId }: FileEditorPanelProps) {
                     </button>
                   );
                 })}
+                {snapshotsEnabled && (
+                  <button
+                    onClick={() => setShowSnapshots((v) => !v)}
+                    title="file snapshots"
+                    className={`ml-2 text-[10px] tracking-[0.15em] uppercase transition-colors ${
+                      showSnapshots ? "text-signal-high" : "text-zinc-600 hover:text-zinc-300"
+                    }`}
+                  >
+                    snapshots
+                  </button>
+                )}
                 {viewLoading && <span className="text-[10px] text-zinc-600 ml-2">loading…</span>}
+              </div>
+            )}
+
+            {/* Snapshots panel — list, diff, restore, delete for the active file. */}
+            {showSnapshots && activeFile && (
+              <div className="border-b border-grid-bounds bg-bg-surface px-3 py-2 max-h-56 overflow-y-auto shrink-0">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[10px] tracking-[0.2em] uppercase text-zinc-500 truncate">
+                    snapshots · {activeFile}
+                  </span>
+                  <span className="flex items-center gap-2 shrink-0">
+                    <button
+                      onClick={() => void takeSnapshot()}
+                      disabled={snapshotsBusy}
+                      className="text-[10px] text-signal-high hover:underline disabled:opacity-40"
+                    >
+                      take snapshot
+                    </button>
+                    <button
+                      onClick={() => setShowSnapshots(false)}
+                      className="text-[10px] text-zinc-500 hover:text-zinc-200"
+                    >
+                      close
+                    </button>
+                  </span>
+                </div>
+                {snapshotsBusy && snapshots.length === 0 ? (
+                  <p className="text-[10px] text-zinc-600">loading…</p>
+                ) : snapshots.length === 0 ? (
+                  <p className="text-[10px] text-zinc-600">
+                    no snapshots yet — take one before risky edits.
+                  </p>
+                ) : (
+                  <ul className="space-y-0.5">
+                    {snapshots.map((snap) => (
+                      <li key={snap.id} className="flex items-center gap-2 text-[10px]">
+                        <span className="text-zinc-400 font-mono tabular-nums shrink-0">
+                          {new Date(snap.at).toLocaleString()}
+                        </span>
+                        <span className="text-zinc-600 tabular-nums shrink-0">
+                          {Math.max(1, Math.round(snap.size / 1024))} KiB
+                        </span>
+                        <span className="flex-1" />
+                        {pendingSnapshotRestore === snap.id ? (
+                          <>
+                            <button
+                              onClick={() => void restoreSnapshot(snap.id)}
+                              disabled={snapshotsBusy}
+                              className="text-fault-vector hover:underline"
+                            >
+                              confirm restore
+                            </button>
+                            <button
+                              onClick={() => setPendingSnapshotRestore(null)}
+                              className="text-zinc-500 hover:text-zinc-200"
+                            >
+                              cancel
+                            </button>
+                          </>
+                        ) : pendingSnapshotDelete === snap.id ? (
+                          <>
+                            <button
+                              onClick={() => void deleteSnapshot(snap.id)}
+                              disabled={snapshotsBusy}
+                              className="text-fault-vector hover:underline"
+                            >
+                              confirm delete
+                            </button>
+                            <button
+                              onClick={() => setPendingSnapshotDelete(null)}
+                              className="text-zinc-500 hover:text-zinc-200"
+                            >
+                              cancel
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => void diffSnapshot(snap.id)}
+                              className="text-zinc-400 hover:text-signal-high"
+                            >
+                              diff
+                            </button>
+                            <button
+                              onClick={() => setPendingSnapshotRestore(snap.id)}
+                              className="text-zinc-400 hover:text-signal-high"
+                            >
+                              restore
+                            </button>
+                            <button
+                              onClick={() => setPendingSnapshotDelete(snap.id)}
+                              className="text-zinc-500 hover:text-fault-vector"
+                            >
+                              delete
+                            </button>
+                          </>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
             )}
             <div className="flex-1 min-h-0">
@@ -709,6 +945,7 @@ export function FileEditorPanel({ serverId }: FileEditorPanelProps) {
                   onCursorPosition={handleCursorPosition}
                   path={activeFile ?? undefined}
                   readOnly={false}
+                  gotoLine={gotoLine}
                 />
               )}
             </div>

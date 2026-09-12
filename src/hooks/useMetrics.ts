@@ -40,6 +40,9 @@ export function useMetrics(serverId: string | null): ShaderTelemetry {
     let disposed = false;
 
     const sample = async () => {
+      // Skip work while the window is hidden (tray/minimized): nobody is
+      // looking at the radar, and the backend sampling has a cost.
+      if (document.hidden) return;
       try {
         const m = await invoke<InstanceMetrics>("get_instance_metrics", { id: serverId });
         if (!disposed) setTelemetry({ cpu: m.cpu, ram: m.ram, status: m.status });
@@ -74,6 +77,7 @@ export function useHostMetrics(): ShaderTelemetry {
   useEffect(() => {
     let disposed = false;
     const sample = async () => {
+      if (document.hidden) return;
       try {
         const m = await invoke<InstanceMetrics>("get_host_metrics");
         if (!disposed) setTelemetry({ cpu: m.cpu, ram: m.ram, status: m.status });

@@ -38,6 +38,8 @@ export interface ScaffoldFile {
 export interface LifecycleStep {
   command: string;
   args: string[];
+  /** Run through the OS shell (sh -c / cmd.exe /C) instead of spawning directly. */
+  useShell?: boolean;
 }
 
 /** Map of lifecycle step name → step (install / start / stop ...). */
@@ -59,6 +61,10 @@ export interface Manifest {
   description?: string;
   /** Path to the compiled ESM frontend bundle, relative to the manifest. */
   uiEntry?: string;
+  /** Capability grants required by the plugin (see permissions.ts). */
+  permissions?: string[];
+  /** Minimum host (kern) version required, e.g. "0.2.0". */
+  kernCompat?: string;
   /** Configuration fields surfaced to the host for dynamic form generation. */
   configSchema: SchemaField[];
   /** Named lifecycle commands. */

@@ -20,10 +20,51 @@ import { useEffect, useRef, useState } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { ServerInstance } from "../../types/server";
+import type { Manifest } from "../../types/manifest";
 import type { HostAPI, PluginTab, ToolbarAction, SidebarItem } from "../../types/plugin";
 import { usePluginTabs } from "../../hooks/usePluginTabs";
 import { useToolbarActions } from "../../hooks/useToolbarActions";
 import { useSidebarItems } from "../../hooks/useSidebarItems";
+import { useToast } from "../../hooks/useToast";
+import { useNotifications } from "../../hooks/useNotifications";
+import { PLUGIN_EVENTS } from "../../types/plugin-events";
+import { createPluginInvoke, hasPermission } from "./permissions";
+
+/* ─── Manifest / permission cache ────────────────────────────────────────
+ *
+ * The plugin's manifest is the source of truth for its capability grants.
+ * Cache it per plugin id so mounting a plugin is one extra IPC at most, and
+ * expose a clear hook so installs/uninstalls take effect immediately.
+ */
+
+const manifestCache = new Map<string, Manifest | null>();
+
+async function getPluginPermissions(pluginId: string): Promise<string[]> {
+  if (manifestCache.has(pluginId)) {
+    return manifestCache.get(pluginId)?.permissions ?? [];
+  }
+  try {
+    const manifest = await invoke<Manifest>("get_plugin", { id: pluginId });
+    manifestCache.set(pluginId, manifest);
+    return manifest.permissions ?? [];
+  } catch {
+    manifestCache.set(pluginId, null);
+    return [];
+  }
+}
+
+/** Clears the cached manifest and preloaded assets — call after install/uninstall/upgrade. */
+export function clearPluginManifestCache(pluginId?: string): void {
+  if (pluginId) {
+    manifestCache.delete(pluginId);
+    preloadCache.delete(pluginId);
+    preloadPromises.delete(pluginId);
+    return;
+  }
+  manifestCache.clear();
+  preloadCache.clear();
+  preloadPromises.clear();
+}
 
 /* ─── Preload cache ──────────────────────────────────────────────────────
  *
@@ -106,6 +147,8 @@ export function PluginBoot({ pluginId, serverData }: PluginBootProps) {
   const { registerTab, unregisterTab } = usePluginTabs();
   const { registerAction, unregisterAction } = useToolbarActions();
   const { registerItem, unregisterItem } = useSidebarItems();
+  const { notify: toast } = useToast();
+  const { push: pushNotification } = useNotifications();
 
   // Track what this plugin instance registered, so we can clean up on unmount.
   const registeredTabIdsRef = useRef<Set<string>>(new Set());
@@ -181,11 +224,16 @@ export function PluginBoot({ pluginId, serverData }: PluginBootProps) {
         }
 
         if (mountFn) {
+          const permissions = await getPluginPermissions(pluginId);
+          if (cancelled) return;
+
           const wrapperRegisterTab = (tab: PluginTab) => {
             // Enrich the tab with the plugin's CSS URL so PluginTabContent can
             // inject it into the tab's visible Shadow Root. The plugin's own
             // mount() doesn't need to know about CSS — PluginBoot handles it.
-            const enriched = { ...tab, cssUrl };
+            // pluginId/permissions ride along so tab-content mounts get the
+            // same permission-gated HostAPI as the plugin's main mount.
+            const enriched = { ...tab, cssUrl, pluginId, permissions };
             registeredTabIdsRef.current.add(enriched.id);
             registerTab(enriched);
           };
@@ -211,8 +259,20 @@ export function PluginBoot({ pluginId, serverData }: PluginBootProps) {
           };
 
           const hostAPI: HostAPI = {
-            invoke: (cmd: string, args?: Record<string, unknown>) => invoke(cmd, args),
+            invoke: createPluginInvoke(pluginId, permissions),
+            permissions,
+            hasPermission: (permission: string) => hasPermission(permissions, permission),
             serverPath: serverData.path,
+            notify: (kind, title, message) => {
+              toast({ kind, title, message });
+              pushNotification({
+                kind,
+                title,
+                message,
+                serverId: serverData.id,
+              });
+            },
+            events: PLUGIN_EVENTS,
             listen: (event: string, handler: (payload: unknown) => void) =>
               listen(event, (e) => handler(e.payload)),
             registerTab: wrapperRegisterTab,
@@ -233,6 +293,8 @@ export function PluginBoot({ pluginId, serverData }: PluginBootProps) {
         }
       } catch (err) {
         if (cancelled) return;
+        // Surface the failure instead of silently contributing no UI.
+        console.error(`[PluginBoot] plugin '${pluginId}' failed to boot:`, err);
         setStatus("error");
       }
     }
@@ -261,15 +323,21 @@ export function PluginBoot({ pluginId, serverData }: PluginBootProps) {
         }
       }
     };
-  }, [pluginId, serverData, registerTab, unregisterTab, registerAction, unregisterAction, registerItem, unregisterItem]);
+  }, [pluginId, serverData, registerTab, unregisterTab, registerAction, unregisterAction, registerItem, unregisterItem, toast, pushNotification]);
 
   // Invisible container — the plugin mounts here but renders nothing visible.
-  // Status is shown inline for debugging (hidden when ready).
+  // Failures are surfaced so a broken plugin isn't silently absent.
   return (
     <>
       <div style={{ display: "none" }} ref={shadowHostRef} />
-      {status !== "ready" && status !== "none" && status === "loading" && (
+      {status === "loading" && (
         <div className="sr-only">loading plugin {pluginId}…</div>
+      )}
+      {status === "error" && (
+        <div className="m-2 border border-fault-vector/40 bg-fault-vector/5 px-2 py-1 text-[11px] text-fault-vector">
+          plugin '{pluginId}' failed to load its UI — check the console for
+          details
+        </div>
       )}
     </>
   );

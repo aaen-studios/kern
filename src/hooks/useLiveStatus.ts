@@ -21,7 +21,8 @@ import type { ServerStatus } from "../types/server";
  */
 type StatusPayload =
   | { state: "running" }
-  | { state: "exited"; code: number | null };
+  | { state: "stopping" }
+  | { state: "exited"; code: number | null; forced?: boolean };
 
 /** Map of instanceId → live status. */
 export type LiveStatusMap = Record<string, ServerStatus>;
@@ -81,10 +82,19 @@ export function useLiveStatus(ids: string[]): UseLiveStatusResult {
             if (payload.state === "running") {
               setLiveStatus((prev) => ({ ...prev, [id]: "running" }));
               void invoke("update_server_status", { id, status: "running" });
+            } else if (payload.state === "stopping") {
+              // Graceful phase in progress — keep the process listed as running
+              // until it actually exits, but surface the transitional status.
+              setLiveStatus((prev) => ({ ...prev, [id]: "stopping" }));
+              void invoke("update_server_status", { id, status: "stopping" });
             } else {
-              // exited — map exit code to stopped/error and persist. Also drop
-              // it from the adopted set (it's no longer running at all).
-              const next: ServerStatus = payload.code != null && payload.code !== 0 ? "error" : "stopped";
+              // exited — map exit code to stopped/error and persist. A forced
+              // kill is a deliberate user action, not a crash.
+              const next: ServerStatus = payload.forced
+                ? "stopped-forced"
+                : payload.code != null && payload.code !== 0
+                  ? "error"
+                  : "stopped";
               setLiveStatus((prev) => ({ ...prev, [id]: next }));
               setLiveAdopted((prev) => {
                 if (!prev.has(id)) return prev;

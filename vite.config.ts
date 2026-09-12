@@ -9,6 +9,19 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [tailwindcss(), react()],
 
+  build: {
+    rollupOptions: {
+      output: {
+        // Keep the big vendors in their own cacheable chunks; monaco only
+        // loads at runtime because its only importer is lazily imported.
+        manualChunks: {
+          react: ["react", "react-dom"],
+          monaco: ["monaco-editor", "@monaco-editor/react"],
+        },
+      },
+    },
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback, memo, lazy, Suspense } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { ServerInstance } from "../../types/server";
@@ -19,8 +19,13 @@ import { PluginBoot, preloadPluginAssets } from "../plugins/PluginBoot";
 import { PluginTabContent } from "../plugins/PluginTabContent";
 import { MatrixBar } from "../matrix/MatrixBar";
 import { reactorChannelShader } from "../matrix/shaders/reactorChannel";
-import { FileEditorPanel } from "./FileEditorPanel";
+// Monaco is heavy (~2 MB); only load the editor when the files tab opens.
+const FileEditorPanel = lazy(() =>
+  import("./FileEditorPanel").then((m) => ({ default: m.FileEditorPanel })),
+);
 import { InstanceMonitor } from "./InstanceMonitor";
+import { InstanceSettingsPanel } from "./InstanceSettingsPanel";
+import { isFeatureEnabled } from "./instanceFeatures";
 import { useToast } from "../../hooks/useToast";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import {
@@ -32,12 +37,19 @@ import {
   useToolbarActions,
 } from "../../hooks/useToolbarActions";
 import type { PluginTab, HostAPI } from "../../types/plugin";
+import {
+  createPluginInvoke,
+  hasPermission as checkPermission,
+} from "../plugins/permissions";
+import { PLUGIN_EVENTS } from "../../types/plugin-events";
+import { useNotifications } from "../../hooks/useNotifications";
 
 /** Built-in tab definitions. The id "logs" is kept for persisted-state compat. */
 const BUILT_IN_TABS = [
   { id: "logs", label: "terminal" },
   { id: "files", label: "files" },
   { id: "monitor", label: "monitor" },
+  { id: "settings", label: "settings" },
 ] as const;
 
 interface ServerDetailViewProps {
@@ -67,8 +79,22 @@ export function ServerDetailView({
   onBack,
   onStatusChange,
 }: ServerDetailViewProps) {
-  const { logs, running, launching, busy, launch, stop, install, restart, error, pushLine } =
-    useServerControl(server.id, onStatusChange);
+  const {
+    logs,
+    running,
+    stopping,
+    launching,
+    busy,
+    launch,
+    stop,
+    install,
+    restart,
+    error,
+    pushLine,
+    preflight,
+    confirmPreflight,
+    cancelPreflight,
+  } = useServerControl(server.id, onStatusChange);
   const { notify } = useToast();
   const { byId } = usePlugins();
 
@@ -105,7 +131,8 @@ export function ServerDetailView({
     editor: { openFiles: [], activeFile: null, expandedPaths: [], cursorLine: 1, cursorCol: 1 },
   };
 
-  const [activeTab, setActiveTabState] = useState<string>("logs");
+  const [activeTab, setActiveTabState] = useState<string>(serverUi.activeTab ?? "logs");
+  const restoredTabRef = useRef<string | null>(null);
 
   // Wrap the setter to also persist the change.
   const setActiveTab = useCallback(
@@ -116,12 +143,23 @@ export function ServerDetailView({
     [server.id, updateServer],
   );
 
-  // Restore command history from persisted state on mount.
+  // Restore the persisted active tab once the UI state for this server has
+  // loaded (it may arrive after first paint), and whenever the server changes.
   useEffect(() => {
-    if (serverUi.commandHistory.length > 0) {
-      inputHistoryRef.current = [...serverUi.commandHistory];
+    if (restoredTabRef.current === server.id) return;
+    if (serverUi.activeTab) {
+      setActiveTabState(serverUi.activeTab);
+      restoredTabRef.current = server.id;
     }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [server.id, serverUi.activeTab]);
+
+  // Restore command history from persisted state (initial load and late ui
+  // state arrival).
+  useEffect(() => {
+    inputHistoryRef.current = serverUi.commandHistory.length
+      ? [...serverUi.commandHistory]
+      : [];
+  }, [server.id, serverUi.commandHistory]);
 
   // Recompute whether the "scroll to bottom" button should be visible. The
   // button shows when the terminal's content overflows AND the user is parked
@@ -172,6 +210,12 @@ export function ServerDetailView({
     } catch { /* non-fatal */ }
   }, [server.id]);
 
+  /** Install the instance and only mark `.installed` once the step succeeds. */
+  const handleInstall = useCallback(async () => {
+    const ok = await install();
+    if (ok) await handleInstalled();
+  }, [install, handleInstalled]);
+
   /** Persist a per-instance custom start command via the `start_command` override. */
   const handleSaveStartCommand = useCallback(async (cmd: string) => {
     const updated: ServerInstance = {
@@ -209,8 +253,7 @@ export function ServerDetailView({
       } else if (cmd === "restart") {
         await restart();
       } else if (cmd === "install") {
-        await install();
-        await handleInstalled();
+        await handleInstall();
       } else {
         // Not a lifecycle keyword — pipe to the running process's stdin, or
         // run as an ad-hoc command in the instance directory when idle.
@@ -237,7 +280,7 @@ export function ServerDetailView({
       setHistoryIndex(-1);
       setInput("");
     },
-    [input, running, server.id, pushLine, launch, stop, restart, install, handleInstalled, updateServer],
+    [input, running, server.id, pushLine, launch, stop, restart, handleInstall, updateServer],
   );
 
   // Up/Down arrows cycle through local command history.
@@ -452,6 +495,7 @@ export function ServerDetailView({
             liveStatus={liveStatus}
             isEffectivelyRunning={isEffectivelyRunning}
             transitioning={transitioning}
+            stopping={stopping}
             hasInstallStep={hasInstallStep}
             installed={installed}
             busy={busy}
@@ -459,8 +503,7 @@ export function ServerDetailView({
             server={server}
             restart={restart}
             onStopRequest={() => setStopConfirm(true)}
-            install={install}
-            handleInstalled={handleInstalled}
+            install={handleInstall}
             launch={launch}
             onSaveStartCommand={handleSaveStartCommand}
             onToggleAutoStart={handleToggleAutoStart}
@@ -524,6 +567,7 @@ export function ServerDetailView({
           inputRef={inputRef}
           handleKeyDown={handleKeyDown}
           handleSubmit={handleSubmit}
+          onServerSaved={onStatusChange}
         />
       </div>
       </ToolbarActionRegistryProvider>
@@ -548,6 +592,41 @@ export function ServerDetailView({
         }}
         onCancel={() => setStopConfirm(false)}
       />
+
+      {/* Pre-start findings (port conflicts / pending EULA / low disk) open
+          this advisory confirm instead of blocking the launch outright. */}
+      <ConfirmDialog
+        open={preflight !== null}
+        title={preflight?.report.eulaPending ? "Accept the Minecraft EULA?" : "Ports in use"}
+        message={
+          preflight
+            ? [
+                preflight.report.eulaPending
+                  ? `"${server.name}" has not accepted the Minecraft EULA (eula.txt says eula=false). Starting the server requires accepting it (https://aka.ms/MinecraftEULA).`
+                  : null,
+                preflight.report.conflicts.length > 0
+                  ? `These ports are held by other processes: ${preflight.report.conflicts
+                      .map((c) => `${c.port} → PID ${c.pid} (${c.process})`)
+                      .join(", ")}. The server may fail to bind.`
+                  : null,
+                preflight.report.lowDisk
+                  ? `Disk space is low${preflight.report.freeMb != null ? ` (${preflight.report.freeMb} MB free)` : ""}.`
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(" ")
+            : ""
+        }
+        confirmLabel={
+          preflight?.report.eulaPending
+            ? preflight.report.conflicts.length > 0
+              ? "accept & start anyway"
+              : "accept EULA & start"
+            : "start anyway"
+        }
+        onConfirm={() => void confirmPreflight()}
+        onCancel={cancelPreflight}
+      />
     </PluginTabRegistryProvider>
   );
 }
@@ -569,6 +648,8 @@ interface TabSectionProps {
   inputRef: React.RefObject<HTMLInputElement | null>;
   handleKeyDown: (e: React.KeyboardEvent<HTMLInputElement>) => void;
   handleSubmit: (e?: React.FormEvent) => Promise<void>;
+  /** Called after an instance-settings save so the registry reloads. */
+  onServerSaved: () => void;
 }
 
 /**
@@ -590,8 +671,11 @@ function TabSection({
   inputRef,
   handleKeyDown,
   handleSubmit,
+  onServerSaved,
 }: TabSectionProps) {
   const { tabs: pluginTabs, getTab } = usePluginTabs();
+  const { notify } = useToast();
+  const { push: pushNotification } = useNotifications();
 
   // Pinned command snippets — one-click terminal buttons. Persisted per instance.
   const snippets = server.commandSnippets ?? [];
@@ -648,11 +732,23 @@ function TabSection({
     return [...builtIn, ...plugin];
   }, [pluginTabs]);
 
-  // Generate a fresh hostAPI for plugin tab content.
-  const hostAPI = useMemo<HostAPI>(
-    () => ({
-      invoke: (cmd, args) => invoke(cmd, args),
+  // Generate a fresh hostAPI for plugin tab content. Uses the owning plugin's
+  // permission grants (set by PluginBoot) so tab mounts can't call commands
+  // the plugin didn't declare.
+  const hostAPI = useMemo<HostAPI>(() => {
+    const tab = getTab(activeTab);
+    const pluginId = tab?.pluginId ?? "unknown";
+    const permissions = tab?.permissions ?? [];
+    return {
+      invoke: createPluginInvoke(pluginId, permissions),
+      permissions,
+      hasPermission: (permission: string) => checkPermission(permissions, permission),
       serverPath: server.path,
+      notify: (kind, title, message) => {
+        notify({ kind, title, message });
+        pushNotification({ kind, title, message, serverId: server.id });
+      },
+      events: PLUGIN_EVENTS,
       listen: (event, handler) =>
         listen(event, (e) => handler(e.payload)),
       // register/unregister methods are no-ops inside tab content
@@ -664,9 +760,8 @@ function TabSection({
       unregisterToolbarAction: () => {},
       registerSidebarItem: () => {},
       unregisterSidebarItem: () => {},
-    }),
-    [server.path],
-  );
+    };
+  }, [server.path, server.id, activeTab, getTab, notify, pushNotification]);
 
   // The active plugin tab descriptor, if the active tab is a plugin tab.
   const activePluginTab = useMemo<PluginTab | undefined>(
@@ -721,38 +816,7 @@ function TabSection({
                 no output yet — start the instance to begin streaming
               </p>
             ) : (
-              logs.map((line, i) => {
-                // Split out a leading timestamp (if any) so it renders dimmed.
-                const { prefix, rest } = parseTimestamp(line);
-                const segments = parseAnsi(rest);
-                const tint = classifyLevelColor(line);
-                return (
-                  <div
-                    key={i}
-                    className="whitespace-pre-wrap break-all"
-                    style={{ color: tint === "inherit" ? DEFAULT_FG : tint }}
-                  >
-                    {/* Timestamp prefix: dimmed, distinct color, rendered first. */}
-                    {prefix ? (
-                      <span style={{ color: TS_COLOR, opacity: 0.6 }}>
-                        {prefix}
-                      </span>
-                    ) : null}
-                    {segments.map((seg, j) => (
-                      <span
-                        key={j}
-                        style={{
-                          color: seg.style.color,
-                          fontWeight: seg.style.bold ? 600 : undefined,
-                          opacity: seg.style.dim ? 0.6 : undefined,
-                        }}
-                      >
-                        {seg.text}
-                      </span>
-                    ))}
-                  </div>
-                );
-              })
+              <LogView lines={logs} />
             )}
           </div>
 
@@ -821,14 +885,37 @@ function TabSection({
       )}
 
       {activeTab === "files" && (
-        <FileEditorPanel serverId={server.id} />
+        <Suspense
+          fallback={
+            <div className="flex-1 flex items-center justify-center">
+              <p className="text-[11px] text-zinc-600">loading editor…</p>
+            </div>
+          }
+        >
+          <FileEditorPanel
+            serverId={server.id}
+            snapshotsEnabled={isFeatureEnabled(server, "snapshots")}
+          />
+        </Suspense>
       )}
 
       {activeTab === "monitor" && (
-        <InstanceMonitor server={server} running={running} />
+        <InstanceMonitor
+          server={server}
+          running={running}
+          onUseCommand={(cmd) => {
+            setInput(cmd);
+            inputRef.current?.focus();
+          }}
+          onServerSaved={onServerSaved}
+        />
       )}
 
-      {activePluginTab && activeTab !== "logs" && activeTab !== "files" && activeTab !== "monitor" && (
+      {activeTab === "settings" && (
+        <InstanceSettingsPanel server={server} onSaved={onServerSaved} />
+      )}
+
+      {activePluginTab && activeTab !== "logs" && activeTab !== "files" && activeTab !== "monitor" && activeTab !== "settings" && (
         <PluginTabContent
           tab={activePluginTab}
           serverData={server}
@@ -839,6 +926,66 @@ function TabSection({
   );
 }
 
+/* ─── LogView — memoized terminal renderer ─────────────────────────────── */
+
+/** Only the tail is rendered; the full log stays on disk. */
+const MAX_RENDERED_LOG_LINES = 600;
+
+/**
+ * Renders the terminal log. Memoized on the `lines` array identity so the
+ * parent's activity-driven re-renders (the MatrixBar updates at ~12.5fps)
+ * don't re-parse and reconcile thousands of spans. Parsing happens once per
+ * log update.
+ */
+const LogView = memo(function LogView({ lines }: { lines: string[] }) {
+  const entries = useMemo(() => {
+    const offset = Math.max(0, lines.length - MAX_RENDERED_LOG_LINES);
+    return lines.slice(offset).map((line) => {
+      const { prefix, rest } = parseTimestamp(line);
+      return {
+        prefix,
+        segments: parseAnsi(rest),
+        tint: classifyLevelColor(line),
+      };
+    });
+  }, [lines]);
+
+  const hidden = Math.max(0, lines.length - MAX_RENDERED_LOG_LINES);
+
+  return (
+    <>
+      {hidden > 0 && (
+        <p className="text-zinc-700 mb-1">
+          … {hidden} earlier {hidden === 1 ? "line" : "lines"} not shown — full log on disk
+        </p>
+      )}
+      {entries.map((entry, i) => (
+        <div
+          key={hidden + i}
+          className="log-line whitespace-pre-wrap break-all"
+          style={{ color: entry.tint === "inherit" ? DEFAULT_FG : entry.tint }}
+        >
+          {entry.prefix ? (
+            <span style={{ color: TS_COLOR, opacity: 0.6 }}>{entry.prefix}</span>
+          ) : null}
+          {entry.segments.map((seg, j) => (
+            <span
+              key={j}
+              style={{
+                color: seg.style.color,
+                fontWeight: seg.style.bold ? 600 : undefined,
+                opacity: seg.style.dim ? 0.6 : undefined,
+              }}
+            >
+              {seg.text}
+            </span>
+          ))}
+        </div>
+      ))}
+    </>
+  );
+});
+
 /* ─── HeaderToolbar — lifecycle buttons + plugin toolbar actions ──────── */
 
 interface HeaderToolbarProps {
@@ -846,6 +993,8 @@ interface HeaderToolbarProps {
   liveStatus: string;
   isEffectivelyRunning: boolean;
   transitioning: boolean;
+  /** True while the graceful-stop phase is in progress. */
+  stopping: boolean;
   hasInstallStep: boolean;
   installed: boolean;
   busy: boolean;
@@ -855,7 +1004,6 @@ interface HeaderToolbarProps {
   /** Opens the stop-confirmation dialog (stop is a destructive action). */
   onStopRequest: () => void;
   install: () => Promise<void>;
-  handleInstalled: () => Promise<void>;
   launch: () => Promise<void>;
   /** Persist a `start_command` override (empty = use the plugin default). */
   onSaveStartCommand: (cmd: string) => Promise<void>;
@@ -868,9 +1016,9 @@ interface HeaderToolbarProps {
  * (start/stop/restart/install), and any plugin-registered toolbar actions.
  */
 function HeaderToolbar({
-  liveHex, liveStatus, isEffectivelyRunning, transitioning,
+  liveHex, liveStatus, isEffectivelyRunning, transitioning, stopping,
   hasInstallStep, installed, busy, launching,
-  server, restart, onStopRequest, install, handleInstalled, launch, onSaveStartCommand, onToggleAutoStart,
+  server, restart, onStopRequest, install, launch, onSaveStartCommand, onToggleAutoStart,
 }: HeaderToolbarProps) {
   const { actions } = useToolbarActions();
 
@@ -902,27 +1050,24 @@ function HeaderToolbar({
         <>
           <button
             onClick={restart}
-            disabled={transitioning}
+            disabled={transitioning || stopping}
             className="px-3 py-1.5 text-xs text-zinc-200 border border-signal-low hover:border-signal-high hover:text-signal-high font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             restart
           </button>
           <button
             onClick={onStopRequest}
-            disabled={transitioning}
+            disabled={transitioning || stopping}
             className="px-3 py-1.5 text-xs text-bg-core bg-fault-vector hover:opacity-80 font-semibold transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            stop
+            {stopping ? "stopping…" : "stop"}
           </button>
         </>
       ) : (
         <>
           {hasInstallStep && (
             <button
-              onClick={async () => {
-                await install();
-                await handleInstalled();
-              }}
+              onClick={install}
               disabled={transitioning || server.isOrphaned}
               className="px-3 py-1.5 text-xs text-zinc-200 border border-signal-low hover:border-signal-high hover:text-signal-high font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >

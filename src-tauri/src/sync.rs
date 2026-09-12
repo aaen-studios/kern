@@ -14,8 +14,6 @@
 //!
 //! Requires `git` on PATH. Configured via `AppSettings.sync_repo_url`.
 
-use std::process::Command;
-
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
@@ -58,7 +56,7 @@ fn sync_dir(app_handle: &AppHandle) -> Result<std::path::PathBuf, String> {
 
 /// Runs `git` in `dir` with the given args, returning stdout on success.
 fn git(dir: &std::path::Path, args: &[&str]) -> Result<String, String> {
-    let out = Command::new("git")
+    let out = crate::process::silent_command("git")
         .current_dir(dir)
         .args(args)
         .output()
@@ -75,7 +73,13 @@ fn git(dir: &std::path::Path, args: &[&str]) -> Result<String, String> {
 /// Initializes a clone if needed, writes `registry.json`, commits, and pushes.
 /// Best-effort: surfaces git errors to the caller. No secrets are written.
 #[tauri::command]
-pub fn sync_export(app_handle: AppHandle) -> Result<(), String> {
+pub async fn sync_export(app_handle: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || sync_export_blocking(app_handle))
+        .await
+        .map_err(|e| format!("sync task failed: {e}"))?
+}
+
+fn sync_export_blocking(app_handle: AppHandle) -> Result<(), String> {
     let cfg = config::load_config(&app_handle)?;
     let repo = cfg.settings.sync_repo_url.trim().to_string();
     if repo.is_empty() {
@@ -135,7 +139,13 @@ pub fn sync_export(app_handle: AppHandle) -> Result<(), String> {
 /// Imports the registry from the configured git repo as a read-only view of
 /// other machines' instances. Never writes to local config.
 #[tauri::command]
-pub fn sync_import(app_handle: AppHandle) -> Result<Vec<ExportedRegistry>, String> {
+pub async fn sync_import(app_handle: AppHandle) -> Result<Vec<ExportedRegistry>, String> {
+    tauri::async_runtime::spawn_blocking(move || sync_import_blocking(app_handle))
+        .await
+        .map_err(|e| format!("sync task failed: {e}"))?
+}
+
+fn sync_import_blocking(app_handle: AppHandle) -> Result<Vec<ExportedRegistry>, String> {
     let cfg = config::load_config(&app_handle)?;
     let repo = cfg.settings.sync_repo_url.trim().to_string();
     if repo.is_empty() {

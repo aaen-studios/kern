@@ -12,6 +12,8 @@ interface ServerListProps {
   /** Navigate to the detail view for a server. */
   onSelect?: (id: string) => void;
   onAdd: () => void;
+  /** Open the "import existing server folder" wizard. */
+  onImport?: () => void;
   /** The current sort preference. When provided alongside onSortChange, the
    * selector UI is rendered in the header. Both optional so older callers of
    * this component keep working without changes. */
@@ -44,6 +46,7 @@ export function ServerList({
   onDelete,
   onEdit,
   onAdd,
+  onImport,
   onSelect,
   sortPreference,
   onSortChange,
@@ -65,14 +68,25 @@ export function ServerList({
         <div className="text-center">
           <p className="text-sm text-zinc-300">no server instances registered</p>
           <p className="mt-1 text-[11px] text-zinc-600">
-            register an instance to begin tracking its lifecycle
+            install a plugin, register a new instance, or adopt an existing
+            server folder
           </p>
-          <button
-            onClick={onAdd}
-            className="mt-4 px-3 py-1.5 text-xs text-bg-core bg-signal-high hover:opacity-80 font-semibold transition-opacity"
-          >
-            + register instance
-          </button>
+          <div className="mt-4 flex items-center justify-center gap-2">
+            <button
+              onClick={onAdd}
+              className="px-3 py-1.5 text-xs text-bg-core bg-signal-high hover:opacity-80 font-semibold transition-opacity"
+            >
+              + register instance
+            </button>
+            {onImport && (
+              <button
+                onClick={onImport}
+                className="px-3 py-1.5 text-xs border border-grid-bounds text-zinc-300 hover:border-signal-low hover:bg-bg-core transition-colors"
+              >
+                import existing folder
+              </button>
+            )}
+          </div>
         </div>
       </div>
     );
@@ -107,6 +121,16 @@ export function ServerList({
           <span className="text-zinc-600 tabular-nums">({servers.length})</span>
         </h2>
         <ul className="flex items-center gap-3">
+          {onImport && (
+            <li>
+              <button
+                onClick={onImport}
+                className="px-2 py-1.5 text-[11px] border border-grid-bounds text-zinc-400 hover:text-zinc-200 hover:border-signal-low transition-colors"
+              >
+                import folder
+              </button>
+            </li>
+          )}
           {showSortControls && (
             <li className="flex items-center gap-1.5 mr-1" title="sort instances">
               <span className="text-[10px] text-zinc-600 uppercase tracking-wider">

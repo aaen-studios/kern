@@ -5,6 +5,18 @@
   "version": "1.2.0",
   "author": "kern/sample",
   "uiEntry": "dist/index.js",
+  "kernCompat": "0.2.0",
+  "stopCommand": "stop",
+  "permissions": [
+    "servers:read",
+    "servers:write",
+    "files:read",
+    "files:write",
+    "process",
+    "downloads",
+    "backups",
+    "metrics"
+  ],
   "configSchema": [
     {
       "key": "runtime",

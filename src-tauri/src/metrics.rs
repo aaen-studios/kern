@@ -76,9 +76,7 @@ impl MetricsState {
         sys.refresh_processes(ProcessesToUpdate::All, true);
 
         let root = Pid::from_u32(root_pid);
-        if sys.process(root).is_none() {
-            return None;
-        }
+        sys.process(root)?;
 
         let cpus = sys.cpus().len().max(1) as f32;
         let total_mem = sys.total_memory();

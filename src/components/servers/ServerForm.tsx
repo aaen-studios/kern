@@ -36,6 +36,8 @@ export function ServerForm({ initial, onSubmit, onCancel }: ServerFormProps) {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [autoStart, setAutoStart] = useState(initial?.autoStart ?? false);
+  const [group, setGroup] = useState(initial?.group ?? "");
+  const [tagsText, setTagsText] = useState((initial?.tags ?? []).join(", "));
 
   // Pre-fill the path with the default sandbox path for new instances. We only
   // set it if the user hasn't typed anything yet, so a manual clear sticks.
@@ -184,7 +186,18 @@ export function ServerForm({ initial, onSubmit, onCancel }: ServerFormProps) {
 
     setSubmitting(true);
     try {
-      await onSubmit({ name: name.trim(), serverType, path: path.trim(), userOverrides, autoStart });
+      await onSubmit({
+        name: name.trim(),
+        serverType,
+        path: path.trim(),
+        userOverrides,
+        autoStart,
+        group: group.trim() || null,
+        tags: tagsText
+          .split(",")
+          .map((t) => t.trim().toLowerCase())
+          .filter(Boolean),
+      });
     } catch (err) {
       setError(String(err));
     } finally {
@@ -276,6 +289,27 @@ export function ServerForm({ initial, onSubmit, onCancel }: ServerFormProps) {
           launch this instance automatically whenever kern starts
         </span>
       </label>
+
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="group">
+          <input
+            value={group}
+            onChange={(e) => setGroup(e.target.value)}
+            placeholder="e.g. Minecraft"
+            className={inputClass}
+          />
+          <p className="mt-1 text-[10px] text-zinc-600">optional sidebar folder</p>
+        </Field>
+        <Field label="tags">
+          <input
+            value={tagsText}
+            onChange={(e) => setTagsText(e.target.value)}
+            placeholder="prod, public, test"
+            className={inputClass}
+          />
+          <p className="mt-1 text-[10px] text-zinc-600">comma-separated filters</p>
+        </Field>
+      </div>
 
       <fieldset>
         <legend className="mb-2 text-[10px] tracking-[0.2em] uppercase text-zinc-500">

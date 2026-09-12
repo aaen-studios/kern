@@ -184,10 +184,27 @@ Users can install plugins by:
 
 ### Security Notes
 
-- `.kern` files are plain zip archives containing no executable code
-- The host validates `manifest.json` before installation
-- No signature verification is performed (trust-based model)
-- Consider publishing checksums alongside downloads
+- `.kern` files are zip archives, but plugins **do contain executable code**:
+  the `uiEntry` bundle runs in the host webview, and lifecycle steps spawn
+  processes. Install only plugins you trust.
+- The host validates the manifest (id, permissions, host compatibility) before
+  installation, verifies registry-provided SHA-256 checksums, and shows the
+  requested permissions in the install dialog.
+- Plugins declare a `permissions` array (e.g. `files:read`, `process`,
+  `downloads`); the HostAPI only forwards commands covered by the granted
+  permissions.
+- No package signature is verified — the trust model is "install consent plus
+  a checked checksum", not publisher signing.
+- Publishing checksums alongside downloads is still recommended.
+
+### Packaging a Release Bundle
+
+Include only `manifest.json` and `dist/` in the archive (never `node_modules`,
+`src/`, or editor config). The bundled sample plugins are packed by:
+
+```bash
+bun run plugins:pack
+```
 
 ### Best Practices
 

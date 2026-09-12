@@ -14,18 +14,23 @@
 
 use tauri::{
     AppHandle, Emitter, Manager,
-    menu::{Menu, MenuItem, PredefinedMenuItem, MenuEvent},
+    menu::{Menu, MenuItem, PredefinedMenuItem, MenuEvent, Submenu},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
 
-use crate::commands::RunningServerInfo;
+use crate::commands::{self, RunningServerInfo};
 use crate::config;
+use crate::metrics::MetricsState;
 use crate::process;
 use crate::window_state;
 
 /// Menu item id prefix for the per-server entries. The instance id follows:
 /// `show:<server-id>`.
 const SHOW_PREFIX: &str = "show:";
+
+/// Menu item id prefix for quick-stop entries: `stop:<server-id>`.
+const STOP_PREFIX: &str = "stop:";
+const STOP_ALL_ID: &str = "stop-all";
 
 /// Menu item ids for the fixed entries.
 const TOGGLE_WINDOW_ID: &str = "toggle-window";
@@ -63,6 +68,20 @@ fn on_menu_event(app: &AppHandle, event: MenuEvent) {
         toggle_window(app);
     } else if id == QUIT_ID {
         quit(app);
+    } else if id == STOP_ALL_ID {
+        let handle = app.clone();
+        std::thread::spawn(move || {
+            let registry: tauri::State<'_, process::ProcessRegistry> = handle.state();
+            for server_id in registry.running_ids() {
+                let _ = commands::stop_instance_blocking(&handle, &server_id);
+            }
+        });
+    } else if let Some(server_id) = id.strip_prefix(STOP_PREFIX) {
+        let handle = app.clone();
+        let server_id = server_id.to_string();
+        std::thread::spawn(move || {
+            let _ = commands::stop_instance_blocking(&handle, &server_id);
+        });
     } else if let Some(server_id) = id.strip_prefix(SHOW_PREFIX) {
         focus_server(app, server_id);
     }
@@ -124,11 +143,35 @@ pub fn refresh_menu(app: &AppHandle) {
 
     let running = list_running(app);
     let count = running.len();
+
+    // Aggregate telemetry + alert state for the tooltip / icon.
+    let mut cpu_sum = 0.0f32;
+    let mut ram_sum = 0.0f32;
+    let mut sampled = 0u32;
+    {
+        let metrics_state: tauri::State<'_, MetricsState> = app.state();
+        for info in &running {
+            if let Some(m) = metrics_state.instance_metrics(info.pid, "running") {
+                cpu_sum += m.cpu;
+                ram_sum += m.ram;
+                sampled += 1;
+            }
+        }
+    }
+    let has_error = config::load_config(app)
+        .map(|cfg| {
+            cfg.servers.values().any(|s| {
+                s.status == "error" || s.status == "stopped-forced"
+            })
+        })
+        .unwrap_or(false);
+
     let header = if count == 0 {
         "kern".to_string()
     } else {
         format!("kern · {count} running")
     };
+    let header = if has_error { format!("⚠ {header}") } else { header };
 
     let mut items: Vec<Box<dyn tauri::menu::IsMenuItem<tauri::Wry>>> = Vec::new();
     if let Ok(h) = MenuItem::with_id(app, "__header", header, false, None::<&str>) {
@@ -155,6 +198,28 @@ pub fn refresh_menu(app: &AppHandle) {
                 items.push(Box::new(item));
             }
         }
+
+        // Quick controls submenu: per-server stop + stop-all.
+        let mut quick: Vec<Box<dyn tauri::menu::IsMenuItem<tauri::Wry>>> = Vec::new();
+        for info in &running {
+            if let Ok(item) = MenuItem::with_id(
+                app,
+                format!("{STOP_PREFIX}{}", info.id),
+                format!("■ stop {}", info.name),
+                true,
+                None::<&str>,
+            ) {
+                quick.push(Box::new(item));
+            }
+        }
+        if let Ok(stop_all) = MenuItem::with_id(app, STOP_ALL_ID, "■ stop all servers", true, None::<&str>) {
+            quick.push(Box::new(stop_all));
+        }
+        let quick_refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> =
+            quick.iter().map(|b| b.as_ref()).collect();
+        if let Ok(submenu) = Submenu::with_items(app, "Quick controls", true, &quick_refs) {
+            items.push(Box::new(submenu));
+        }
     }
 
     if let Ok(sep) = PredefinedMenuItem::separator(app) {
@@ -180,11 +245,84 @@ pub fn refresh_menu(app: &AppHandle) {
     if let Ok(menu) = Menu::with_items(app, &refs) {
         let _ = tray.set_menu(Some(menu));
     }
-    let _ = tray.set_tooltip(Some(if count == 0 {
-        "kern".to_string()
+
+    // Tooltip: running count + aggregate CPU/RAM + alert marker.
+    let mut tooltip = if count == 0 {
+        "kern · idle".to_string()
     } else {
         format!("kern · {count} running")
-    }));
+    };
+    if sampled > 0 {
+        tooltip.push_str(&format!(
+            " · cpu {:.0}% · ram {:.0}%",
+            cpu_sum * 100.0,
+            (ram_sum / sampled as f32) * 100.0
+        ));
+    }
+    if has_error {
+        tooltip = format!("⚠ {tooltip}");
+    }
+    let _ = tray.set_tooltip(Some(tooltip));
+
+    // Dynamic icon state: alert > running > idle.
+    let state = if has_error {
+        TrayState::Alert
+    } else if count > 0 {
+        TrayState::Running
+    } else {
+        TrayState::Idle
+    };
+    set_state_icon(&tray, state);
+}
+
+/// Tray icon tint states.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TrayState {
+    Idle,
+    Running,
+    Alert,
+}
+
+/// Overlays a state-colored dot on the app icon and applies it to the tray.
+/// The base icon is decoded from the bundled PNG (tiny; cheap enough per menu
+/// refresh).
+fn set_state_icon(tray: &tauri::tray::TrayIcon, state: TrayState) {
+    const BASE_ICON: &[u8] = include_bytes!("../icons/32x32.png");
+    let Ok(base) = tauri::image::Image::from_bytes(BASE_ICON) else {
+        return;
+    };
+    let width = base.width();
+    let height = base.height();
+    let mut rgba = base.rgba().to_vec();
+
+    let color: [u8; 3] = match state {
+        TrayState::Idle => [76, 82, 94],      // gray
+        TrayState::Running => [76, 245, 160], // signal green
+        TrayState::Alert => [245, 76, 76],    // fault red
+    };
+
+    // Bottom-right dot: ~1/3 of the icon, with a 1px inset.
+    let radius = (width.min(height) / 6).max(3) as i32;
+    let cx = width as i32 - radius - 2;
+    let cy = height as i32 - radius - 2;
+    for y in (cy - radius).max(0)..(cy + radius).min(height as i32) {
+        for x in (cx - radius).max(0)..(cx + radius).min(width as i32) {
+            let dx = x - cx;
+            let dy = y - cy;
+            if dx * dx + dy * dy <= radius * radius {
+                let idx = ((y as u32 * width + x as u32) * 4) as usize;
+                if idx + 3 < rgba.len() {
+                    rgba[idx] = color[0];
+                    rgba[idx + 1] = color[1];
+                    rgba[idx + 2] = color[2];
+                    rgba[idx + 3] = 255;
+                }
+            }
+        }
+    }
+
+    let icon = tauri::image::Image::new_owned(rgba, width, height);
+    let _ = tray.set_icon(Some(icon));
 }
 
 /// Joins the live process table with the registry to resolve names, in the

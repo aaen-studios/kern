@@ -12,6 +12,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useToast } from "../../hooks/useToast";
 import type { RegistryPlugin } from "../../types/features";
 import { usePlugins } from "../../hooks/usePlugins";
+import { clearPluginManifestCache } from "./PluginBoot";
 
 interface PluginMarketplaceProps {
   onClose: () => void;
@@ -75,6 +76,12 @@ export function PluginMarketplace({ onClose }: PluginMarketplaceProps) {
     [installed],
   );
 
+  /** Installed version for a registry slug, when it maps to a local plugin. */
+  const installedVersion = useCallback(
+    (slug: string) => installed.find((p) => p.id === slug)?.version ?? null,
+    [installed],
+  );
+
   async function handleInstall(plugin: RegistryPlugin) {
     const version = plugin.versions[0]?.version;
     if (!version) {
@@ -96,7 +103,11 @@ export function PluginMarketplace({ onClose }: PluginMarketplaceProps) {
         slug: plugin.slug,
         version,
         progressId,
+        // Verify the package against the registry's advertised checksum when
+        // present (protects against corrupted or tampered downloads).
+        expectedSha256: plugin.versions[0]?.sha256 ?? null,
       });
+      clearPluginManifestCache(plugin.slug);
       await refresh();
       notify({ kind: "success", title: "Installed", message: `${plugin.displayName} ${version}` });
     } catch (e) {
@@ -172,8 +183,14 @@ export function PluginMarketplace({ onClose }: PluginMarketplaceProps) {
           {!loading &&
             results.map((p) => {
               const installedFlag = isInstalled(p.slug);
+              const localVersion = installedVersion(p.slug);
               const installing = installingSlug === p.slug;
               const latest = p.versions[0];
+              const hasUpdate =
+                installedFlag &&
+                !!latest &&
+                !!localVersion &&
+                latest.version !== localVersion;
               return (
                 <div
                   key={p.slug}
@@ -189,7 +206,12 @@ export function PluginMarketplace({ onClose }: PluginMarketplaceProps) {
                       )}
                       {installedFlag && (
                         <span className="text-[9px] tracking-[0.15em] uppercase text-zinc-500">
-                          installed
+                          installed{localVersion ? ` v${localVersion}` : ""}
+                        </span>
+                      )}
+                      {hasUpdate && (
+                        <span className="text-[9px] tracking-[0.15em] uppercase text-warn-vector border border-warn-vector/40 px-1">
+                          update available
                         </span>
                       )}
                     </div>
@@ -218,7 +240,13 @@ export function PluginMarketplace({ onClose }: PluginMarketplaceProps) {
                         : "text-bg-core bg-signal-high hover:opacity-80"
                     } disabled:opacity-40 disabled:cursor-not-allowed`}
                   >
-                    {installing ? "installing…" : installedFlag ? "reinstall" : "install"}
+                    {installing
+                      ? "installing…"
+                      : hasUpdate
+                        ? "update"
+                        : installedFlag
+                          ? "reinstall"
+                          : "install"}
                   </button>
                 </div>
               );

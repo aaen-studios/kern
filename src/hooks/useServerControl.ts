@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { PreflightReport } from "../types/server";
 
 /**
  * Process lifecycle + live log streaming for a single server instance.
@@ -18,7 +19,8 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 /** Mirrors StatusPayload in src-tauri/src/process.rs. */
 type StatusPayload =
   | { state: "running" }
-  | { state: "exited"; code: number | null };
+  | { state: "stopping" }
+  | { state: "exited"; code: number | null; forced?: boolean };
 
 /** Max lines held in memory before older entries are trimmed. */
 const MAX_LINES = 2000;
@@ -53,6 +55,8 @@ function hasTimestamp(line: string): boolean {
 interface UseServerControlResult {
   logs: string[];
   running: boolean;
+  /** True while a graceful stop is in progress (process still alive). */
+  stopping: boolean;
   launching: boolean;
   /** True while a non-start lifecycle step (install, build, etc.) is running. */
   busy: boolean;
@@ -60,8 +64,9 @@ interface UseServerControlResult {
   launch: () => Promise<void>;
   /** Terminate the instance. Idempotent. */
   stop: () => Promise<void>;
-  /** Run the "install" lifecycle step (e.g. npm install, cargo build). */
-  install: () => Promise<void>;
+  /** Run the "install" lifecycle step (e.g. npm install, cargo build). Resolves
+   *  true on success so callers can gate the `.installed` marker. */
+  install: () => Promise<boolean>;
   /** Restart a running instance (stop then start). */
   restart: () => Promise<void>;
   /** Run an arbitrary lifecycle step by name. */
@@ -69,6 +74,14 @@ interface UseServerControlResult {
   /** Append a line directly to the local log buffer (for local echo, etc.). */
   pushLine: (line: string) => void;
   error: string | null;
+  /**
+   * Set when a launch/restart found actionable issues (port conflicts, a
+   * pending EULA). Render a confirm dialog from it, then call
+   * `confirmPreflight` or `cancelPreflight`.
+   */
+  preflight: { action: "launch" | "restart"; report: PreflightReport } | null;
+  confirmPreflight: () => Promise<void>;
+  cancelPreflight: () => void;
 }
 
 export function useServerControl(
@@ -77,17 +90,44 @@ export function useServerControl(
 ): UseServerControlResult {
   const [logs, setLogs] = useState<string[]>([]);
   const [running, setRunning] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [launching, setLaunching] = useState(false);
   const [busy, setBusy] = useState(false); // non-start step in progress
   const [error, setError] = useState<string | null>(null);
+  const [preflight, setPreflight] = useState<{
+    action: "launch" | "restart";
+    report: PreflightReport;
+  } | null>(null);
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
+
+  // Log lines are buffered and flushed on a short cadence instead of calling
+  // setState per line. A chatty server can emit hundreds of lines per second;
+  // a single state append every 100ms keeps rendering bounded while still
+  // feeling live.
+  const bufferedLinesRef = useRef<string[]>([]);
+  const flushTimerRef = useRef<number | null>(null);
+
+  const flushBufferedLines = useCallback(() => {
+    if (flushTimerRef.current !== null) {
+      window.clearTimeout(flushTimerRef.current);
+      flushTimerRef.current = null;
+    }
+    const batch = bufferedLinesRef.current;
+    if (batch.length === 0) return;
+    bufferedLinesRef.current = [];
+    setLogs((prev) => {
+      const next = [...prev, ...batch];
+      return next.length > MAX_LINES ? next.slice(next.length - MAX_LINES) : next;
+    });
+  }, []);
 
   // Seed the log buffer + running state whenever the selected server changes.
   useEffect(() => {
     let cancelled = false;
     setLogs([]);
     setError(null);
+    setStopping(false);
     if (!serverId) {
       setRunning(false);
       return;
@@ -140,10 +180,10 @@ export function useServerControl(
         const logUnlisten = await listen<string>(`log:${serverId}:stream`, (event) => {
           // Ignore events from a subscription a newer effect cycle has superseded.
           if (subscriptionGen !== gen) return;
-          setLogs((prev) => {
-            const next = [...prev, event.payload];
-            return next.length > MAX_LINES ? next.slice(next.length - MAX_LINES) : next;
-          });
+          bufferedLinesRef.current.push(event.payload);
+          if (flushTimerRef.current === null) {
+            flushTimerRef.current = window.setTimeout(flushBufferedLines, 100);
+          }
         });
         if (disposed) {
           // Effect already cleaned up before this listener resolved — detach it.
@@ -157,12 +197,21 @@ export function useServerControl(
           const payload = event.payload;
           if (payload.state === "running") {
             setRunning(true);
+            setStopping(false);
             setBusy(false);
+          } else if (payload.state === "stopping") {
+            // Graceful phase in progress — the process is still alive.
+            setStopping(true);
           } else {
             // exited — sync persisted status so the sidebar matches reality.
             setRunning(false);
+            setStopping(false);
             setBusy(false);
-            const newStatus = payload.code != null && payload.code !== 0 ? "error" : "stopped";
+            const newStatus = payload.forced
+              ? "stopped-forced"
+              : payload.code != null && payload.code !== 0
+                ? "error"
+                : "stopped";
             void invoke("update_server_status", { id: serverId, status: newStatus });
           }
           onChangeRef.current?.();
@@ -184,10 +233,17 @@ export function useServerControl(
       disposed = true;
       unlistenLog?.();
       unlistenStatus?.();
+      // Discard buffered lines from the previous server — the next view
+      // re-seeds from the on-disk tail, and flushing here would pollute it.
+      if (flushTimerRef.current !== null) {
+        window.clearTimeout(flushTimerRef.current);
+        flushTimerRef.current = null;
+      }
+      bufferedLinesRef.current = [];
     };
-  }, [serverId]);
+  }, [serverId, flushBufferedLines]);
 
-  const launch = useCallback(async () => {
+  const doLaunch = useCallback(async () => {
     if (!serverId || launching) return;
     setLaunching(true);
     setError(null);
@@ -202,32 +258,35 @@ export function useServerControl(
     }
   }, [serverId, launching]);
 
-  const stop = useCallback(async () => {
-    if (!serverId) return;
-    setError(null);
-    try {
-      await invoke("stop_server_instance", { id: serverId });
-      // Stop runs async in background; the status event will set running=false.
-    } catch (e) {
-      setError(String(e));
-    }
-  }, [serverId]);
+  /**
+   * Advisory pre-start checks: ports the instance used last time now held by
+   * another process, and a pending Minecraft EULA. A failed check never blocks
+   * the start — only a positive finding opens the confirm dialog.
+   */
+  const runPreflight = useCallback(
+    async (action: "launch" | "restart"): Promise<boolean> => {
+      if (!serverId) return true;
+      try {
+        const report = await invoke<PreflightReport>("preflight_launch", { id: serverId });
+        if (report.conflicts.length > 0 || report.eulaPending) {
+          setPreflight({ action, report });
+          return false;
+        }
+      } catch {
+        // Advisory only.
+      }
+      return true;
+    },
+    [serverId],
+  );
 
-  const install = useCallback(async () => {
-    if (!serverId || busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await invoke("install_server_instance", { id: serverId });
-      onChangeRef.current?.();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
-    }
-  }, [serverId, busy]);
+  const launch = useCallback(async () => {
+    if (!serverId || launching) return;
+    if (!(await runPreflight("launch"))) return;
+    await doLaunch();
+  }, [serverId, launching, runPreflight, doLaunch]);
 
-  const restart = useCallback(async () => {
+  const doRestart = useCallback(async () => {
     if (!serverId || launching) return;
     setLaunching(true);
     setError(null);
@@ -241,6 +300,65 @@ export function useServerControl(
       setLaunching(false);
     }
   }, [serverId, launching]);
+
+  const restart = useCallback(async () => {
+    if (!serverId || launching) return;
+    if (!(await runPreflight("restart"))) return;
+    await doRestart();
+  }, [serverId, launching, runPreflight, doRestart]);
+
+  const cancelPreflight = useCallback(() => setPreflight(null), []);
+
+  const confirmPreflight = useCallback(async () => {
+    const pending = preflight;
+    if (!pending || !serverId) return;
+    setPreflight(null);
+    if (pending.report.eulaPending) {
+      try {
+        await invoke("write_server_file", {
+          id: serverId,
+          relPath: "eula.txt",
+          content: "eula=true\n",
+          expectedMtime: null,
+        });
+      } catch (e) {
+        setError(`Could not accept the EULA: ${String(e)}`);
+        return;
+      }
+    }
+    if (pending.action === "launch") {
+      await doLaunch();
+    } else {
+      await doRestart();
+    }
+  }, [preflight, serverId, doLaunch, doRestart]);
+
+  const stop = useCallback(async () => {
+    if (!serverId) return;
+    setError(null);
+    try {
+      await invoke("stop_server_instance", { id: serverId });
+      // Stop runs async in background; the status event will set running=false.
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [serverId]);
+
+  const install = useCallback(async (): Promise<boolean> => {
+    if (!serverId || busy) return false;
+    setBusy(true);
+    setError(null);
+    try {
+      await invoke("install_server_instance", { id: serverId });
+      onChangeRef.current?.();
+      return true;
+    } catch (e) {
+      setError(String(e));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }, [serverId, busy]);
 
   const runStep = useCallback(async (stepName: string) => {
     if (!serverId || busy) return;
@@ -270,5 +388,21 @@ export function useServerControl(
     );
   }, []);
 
-  return { logs, running, launching, busy, launch, stop, install, restart, runStep, pushLine, error };
+  return {
+    logs,
+    running,
+    stopping,
+    launching,
+    busy,
+    launch,
+    stop,
+    install,
+    restart,
+    runStep,
+    pushLine,
+    error,
+    preflight,
+    confirmPreflight,
+    cancelPreflight,
+  };
 }

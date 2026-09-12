@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 interface ConfirmDialogProps {
   open: boolean;
@@ -42,25 +42,53 @@ export function ConfirmDialog({
   onCancel,
 }: ConfirmDialogProps) {
   const confirmRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
   const [optionalChecked, setOptionalChecked] = useState(false);
+  const titleId = useId();
 
   // Reset the checkbox whenever the dialog opens.
   useEffect(() => {
     if (open) setOptionalChecked(false);
   }, [open]);
 
-  // Focus the confirm button when opened; return focus on close.
+  // Focus the confirm button when opened; restore the previous focus on close.
   useEffect(() => {
     if (open) {
+      previouslyFocusedRef.current = document.activeElement as HTMLElement | null;
       confirmRef.current?.focus();
+    } else {
+      previouslyFocusedRef.current?.focus?.();
+      previouslyFocusedRef.current = null;
     }
   }, [open]);
 
-  // Close on Escape.
+  // Escape closes; Tab is trapped inside the dialog.
   useEffect(() => {
     if (!open) return;
     function handleKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onCancel();
+      if (e.key === "Escape") {
+        onCancel();
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const dialog = dialogRef.current;
+      if (!dialog) return;
+      const focusables = Array.from(
+        dialog.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((el) => !el.hasAttribute("disabled"));
+      if (focusables.length === 0) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
     }
     document.addEventListener("keydown", handleKey);
     return () => document.removeEventListener("keydown", handleKey);
@@ -81,14 +109,15 @@ export function ConfirmDialog({
 
       {/* Dialog */}
       <div
+        ref={dialogRef}
         className="relative z-10 w-full max-w-sm border border-grid-bounds bg-bg-surface p-5"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
-        aria-labelledby="confirm-title"
+        aria-labelledby={titleId}
       >
         <h2
-          id="confirm-title"
+          id={titleId}
           className="text-xs text-zinc-200 mb-1 tracking-[0.15em] uppercase"
         >
           {title}

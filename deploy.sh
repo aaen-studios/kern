@@ -17,9 +17,20 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 
 # ── Load .env for signing credentials ────────────────────────────────
+# Parsed line-by-line (not `export $(... | xargs)`) so values containing
+# spaces, quotes, or `#` survive intact.
 if [ -f src-tauri/.env ]; then
   set +u
-  export $(grep -v '^#' src-tauri/.env | xargs)
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      ''|\#*) continue ;;
+    esac
+    key="${line%%=*}"
+    value="${line#*=}"
+    key="$(printf '%s' "$key" | tr -d '[:space:]')"
+    [ -z "$key" ] && continue
+    export "$key=$value"
+  done < src-tauri/.env
   set -u
   echo "✓ Loaded .env"
 fi
@@ -39,6 +50,28 @@ CARGO_VERSION="$(grep '^version' src-tauri/Cargo.toml | head -1 | sed 's/^versio
 if [ -n "${1:-}" ]; then
   # Explicit version argument wins — bump all three files to it.
   VERSION="$1"
+  if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$'; then
+    echo "! '$VERSION' is not valid semver (expected MAJOR.MINOR.PATCH)" >&2
+    exit 1
+  fi
+  # Refuse accidental downgrades — the updater treats versions monotonicly.
+  version_lt() {
+    [ "$1" = "$2" ] && return 1
+    local IFS=.
+    local -a a=($1) b=($2)
+    local i ai bi
+    for i in 0 1 2; do
+      ai="${a[$i]:-0}"; ai="${ai%%[-+]*}"
+      bi="${b[$i]:-0}"; bi="${bi%%[-+]*}"
+      [ "${ai:-0}" -lt "${bi:-0}" ] 2>/dev/null && return 0
+      [ "${ai:-0}" -gt "${bi:-0}" ] 2>/dev/null && return 1
+    done
+    return 1
+  }
+  if version_lt "$VERSION" "$CONF_VERSION"; then
+    echo "! refusing to downgrade from $CONF_VERSION to $VERSION" >&2
+    exit 1
+  fi
   echo "⟳ Bumping version → $VERSION"
   sed -i.bak "s/\"version\": \"$PKG_VERSION\"/\"version\": \"$VERSION\"/" package.json
   sed -i.bak "s/\"version\": \"$CONF_VERSION\"/\"version\": \"$VERSION\"/" src-tauri/tauri.conf.json
@@ -102,9 +135,24 @@ else
 fi
 
 # ── Build ───────────────────────────────────────────────────────────
-echo "⟳ Building kern v$VERSION ..."
-bun install
-bun tauri build
+# KERN_CUSTOM_INSTALLER=1 uses the standalone installer app (installer/)
+# instead of the skinned NSIS bundle. Both produce the same updater artifact
+# shape (an .exe zipped + minisign-signed) and both honor /P and /R.
+if [ "${KERN_CUSTOM_INSTALLER:-0}" = "1" ]; then
+  echo "⟳ Building kern v$VERSION + standalone installer ..."
+  bun install --frozen-lockfile
+  node scripts/build-installer.mjs
+else
+  echo "⟳ Building kern v$VERSION ..."
+  bun install --frozen-lockfile
+  # TAURI_BUNDLES optionally narrows which bundles to build (e.g. "appimage"
+  # on CI where the rpm toolchain isn't installed).
+  if [ -n "${TAURI_BUNDLES:-}" ]; then
+    bun tauri build --bundles "$TAURI_BUNDLES"
+  else
+    bun tauri build
+  fi
+fi
 echo "✓ Build complete."
 
 # ── Locate artifacts & create archive ─────────────────────────────────
@@ -112,14 +160,22 @@ echo "  Checking for artifacts in src-tauri/target/release/bundle/ ..."
 ls -la src-tauri/target/release/bundle/ 2>/dev/null || echo "  (no bundle dir yet)"
 case "$PLATFORM" in
   windows)
-    BUNDLE_DIR="src-tauri/target/release/bundle/nsis"
-    INSTALLER=""
-    for f in "$BUNDLE_DIR"/*.exe; do
-      [ -f "$f" ] && INSTALLER="$f" && break
-    done
-    if [ -z "$INSTALLER" ]; then
-      echo "! No .exe found in $BUNDLE_DIR/ — check build output."
-      exit 1
+    if [ "${KERN_CUSTOM_INSTALLER:-0}" = "1" ]; then
+      INSTALLER="installer/target/release/kern-setup.exe"
+      if [ ! -f "$INSTALLER" ]; then
+        echo "! Standalone installer not found at $INSTALLER."
+        exit 1
+      fi
+    else
+      BUNDLE_DIR="src-tauri/target/release/bundle/nsis"
+      INSTALLER=""
+      for f in "$BUNDLE_DIR"/*.exe; do
+        [ -f "$f" ] && INSTALLER="$f" && break
+      done
+      if [ -z "$INSTALLER" ]; then
+        echo "! No .exe found in $BUNDLE_DIR/ — check build output."
+        exit 1
+      fi
     fi
     ARCHIVE="${INSTALLER}.zip"
     echo "⟳ Creating $ARCHIVE ..."
@@ -157,23 +213,27 @@ with zipfile.ZipFile(sys.argv[1], 'w', zipfile.ZIP_DEFLATED) as zf:
     for f in "$BUNDLE_DIR"/*.dmg; do
       [ -f "$f" ] && INSTALLER="$f" && break
     done
-    if [ -z "$INSTALLER" ]; then
-      BUNDLE_DIR="src-tauri/target/release/bundle/macos"
-      for f in "$BUNDLE_DIR"/*.app.tar.gz; do
-        [ -f "$f" ] && INSTALLER="$f" && break
-      done
-      if [ -n "$INSTALLER" ]; then
-        ARCHIVE="$INSTALLER"
-        echo "  (already compressed: $(basename "$ARCHIVE"))"
-      fi
-    else
+    # The updater needs a `.app.tar.gz` (it swaps the .app bundle); a dmg is
+    # only the human-facing installer. Build the tarball from the bundle.
+    APP_DIR="src-tauri/target/release/bundle/macos"
+    if [ -d "$APP_DIR/kern.app" ]; then
+      ARCHIVE="$APP_DIR/kern.app.tar.gz"
+      echo "⟳ Creating $ARCHIVE ..."
+      rm -f "$ARCHIVE"
+      tar czf "$ARCHIVE" -C "$APP_DIR" kern.app
+    elif [ -n "$INSTALLER" ]; then
+      # Fallback: no .app bundle (older Tauri output) — gzip the dmg.
       ARCHIVE="${INSTALLER}.gz"
       echo "⟳ Creating $ARCHIVE ..."
       rm -f "$ARCHIVE"
       gzip -c "$INSTALLER" > "$ARCHIVE"
+    else
+      for f in "$APP_DIR"/*.app.tar.gz; do
+        [ -f "$f" ] && ARCHIVE="$f" && break
+      done
     fi
     if [ -z "${INSTALLER:-}" ]; then
-      echo "! No .dmg or .app.tar.gz found — check build output."
+      echo "! No .dmg or .app found — check build output."
       exit 1
     fi
     ;;
@@ -182,6 +242,11 @@ esac
 if [ -z "${INSTALLER:-}" ] || [ ! -f "$INSTALLER" ]; then
   echo "! No build artifact found in $BUNDLE_DIR"
   echo "  Check src-tauri/target/release/bundle/ manually."
+  exit 1
+fi
+
+if [ -z "${ARCHIVE:-}" ] || [ ! -f "$ARCHIVE" ]; then
+  echo "! No updater archive was produced — check the build output above."
   exit 1
 fi
 
@@ -210,13 +275,18 @@ fi
 # ── Sign ────────────────────────────────────────────────────────────
 echo ""
 echo "⟳ Signing archive..."
-SIGNATURE=""
-if command -v bun &>/dev/null; then
-  SIGNATURE="$(bun x tauri signer sign --private-key-path "$KEY_PATH" "$ARCHIVE" 2>&1 || true)"
+# Pass the password explicitly (even when empty) so the signer can never fall
+# back to an interactive prompt — in CI there is no TTY, and a prompt would
+# hang forever instead of failing. `UPDATER_PRIVATE_KEY_PASSWORD` comes from
+# src-tauri/.env (or the environment).
+TAURI_BIN="./node_modules/.bin/tauri"
+if [ ! -x "$TAURI_BIN" ]; then
+  TAURI_BIN="bun run tauri"
 fi
-if [ -z "$SIGNATURE" ] || ! echo "$SIGNATURE" | grep -qE '^(dW50cn|RW)'; then
-  SIGNATURE="$(bun run tauri signer sign --private-key-path "$KEY_PATH" "$ARCHIVE" 2>&1 || true)"
-fi
+SIGNATURE="$($TAURI_BIN signer sign \
+  --private-key-path "$KEY_PATH" \
+  --password "${UPDATER_PRIVATE_KEY_PASSWORD:-}" \
+  "$ARCHIVE" < /dev/null 2>&1 || true)"
 
 # Extract just the signature line (starts with dW50cn... or RW...)
 SIGNATURE="$(echo "$SIGNATURE" | tr -d '\r' | grep -E '^(dW50cn|RW)' | head -1 | xargs)"
@@ -271,11 +341,19 @@ if [ -f update.json.prev ]; then
 import json, sys
 prev = json.load(open('update.json.prev'))
 curr = json.load(open('update.json'))
+if prev.get('version') == curr['version']:
+    platforms = {**prev.get('platforms', {}), **curr['platforms']}
+else:
+    # Never carry platform entries from a previous version: clients would be
+    # told vNEW exists but download the vOLD artifact.
+    platforms = curr['platforms']
+    if prev.get('platforms'):
+        print(f'  previous manifest was v{prev.get(\"version\")} — starting a fresh platform set')
 merged = {
   'version': curr['version'],
   'notes': curr['notes'],
   'pub_date': curr['pub_date'],
-  'platforms': {**prev.get('platforms', {}), **curr['platforms']}
+  'platforms': platforms
 }
 json.dump(merged, open('update.json', 'w'), indent=2)
 print('Merged platforms:', list(merged['platforms'].keys()))
@@ -284,18 +362,49 @@ fi
 
 cp update.json update.json.prev
 
+# ── Stage release assets ────────────────────────────────────────────
+# Collect everything a release needs into one directory with stable names:
+#   release-assets/<installer>          (human download)
+#   release-assets/<archive>            (updater artifact)
+#   release-assets/update-<platform>.json (per-platform manifest fragment)
+# The release workflow uploads these and merges the fragments into update.json;
+# local users can upload the files to a GitHub release manually.
+mkdir -p release-assets
+rm -f release-assets/*
+cp "$INSTALLER" release-assets/
+cp "$ARCHIVE" release-assets/
+# Ship the CLI standalone too (it's embedded in the Windows installer payload,
+# but Linux/macOS users get it as a release asset).
+for cli in src-tauri/target/release/kern-cli.exe src-tauri/target/release/kern-cli; do
+  if [ -f "$cli" ]; then
+    cp "$cli" release-assets/
+    break
+  fi
+done
+cp update.json "release-assets/update-$PLATFORM.json"
+echo "✓ Release assets staged in release-assets/"
+ls -la release-assets/
+
 # ── Summary ─────────────────────────────────────────────────────────
 echo ""
 echo "═══════════════════════════════════════════════════════════════"
 echo "  kern v$VERSION · $PLATFORM ($ARCH)"
 echo "═══════════════════════════════════════════════════════════════"
 echo ""
-echo "  Upload to GitHub release tag v$VERSION:"
+echo "  Release assets ready in release-assets/:"
+echo "    • $(basename "$INSTALLER")"
+echo "    • $(basename "$ARCHIVE")"
+echo "    • update-$PLATFORM.json (fragment for the merged update.json)"
+echo ""
+echo "  Automated: push a v$VERSION tag — GitHub Actions builds every"
+echo "  platform, merges the fragments, and creates the release."
+echo ""
+echo "  Manual alternative — upload to the GitHub release tag v$VERSION:"
 echo "    • $INSTALLER"
 echo "    • $ARCHIVE"
-echo "    • update.json"
+echo "    • update.json (merged across platforms)"
 echo ""
-echo "  To add another platform, run on that platform:"
+echo "  To add another platform locally, run on that platform:"
 echo "    ./deploy.sh $VERSION"
 echo "  (it will merge into update.json automatically)"
 echo ""

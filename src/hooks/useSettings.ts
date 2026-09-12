@@ -33,8 +33,15 @@ const DEFAULT_SETTINGS: AppSettings = {
   machineWatts: 120,
   registryUrl: "https://kern.aaenz.no",
   webRemoteEnabled: false,
+  webRemotePort: 7440,
   webRemotePassphrase: "",
   syncRepoUrl: "",
+  nativeNotifications: true,
+  webhookUrl: "",
+  webhookEnabled: false,
+  logAlerts: [],
+  automationEnabled: true,
+  automationPort: 7442,
 };
 
 export function useSettings(): UseSettingsResult {
@@ -62,10 +69,18 @@ export function useSettings(): UseSettingsResult {
   const update = useCallback(
     async (partial: Partial<AppSettings>) => {
       if (!settings) return;
+      const previous = settings;
       const next: AppSettings = { ...settings, ...partial };
       // Optimistically update so the toggle feels instant.
       setSettings(next);
-      await invoke("update_app_settings", { settings: next });
+      try {
+        await invoke("update_app_settings", { settings: next });
+        setError(null);
+      } catch (e) {
+        // Roll back so the UI never displays a value that didn't persist.
+        setSettings(previous);
+        setError(String(e));
+      }
     },
     [settings],
   );

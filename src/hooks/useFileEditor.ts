@@ -31,17 +31,21 @@ export interface FileEditorState {
   activeFileData: OpenFile | null;
   /** A path with an unresolved on-disk conflict (save was blocked), or null. */
   conflict: string | null;
+  /** Line to jump to in the active editor (set by search / go-to-line). */
+  gotoLine: number | null;
 }
 
 export interface FileEditorActions {
   /** Open a file by its relative path, loading content from disk. */
   openFile: (relPath: string) => Promise<void>;
+  /** Open a file and reveal/position the cursor at `line` (1-based). */
+  openFileAt: (relPath: string, line: number) => Promise<void>;
   /** Close a file tab. If dirty, the caller should confirm first. */
   closeFile: (relPath: string) => void;
   /** Switch the active editor tab. */
   setActiveFile: (relPath: string | null) => void;
   /** Save a single file to disk. */
-  saveFile: (relPath: string) => Promise<void>;
+  saveFile: (relPath: string) => Promise<boolean>;
   /** Save all dirty files. */
   saveAllFiles: () => Promise<void>;
   /** Update the in-memory content of a file (marks it dirty). */
@@ -105,6 +109,7 @@ export function useFileEditor(serverId: string): FileEditorState & FileEditorAct
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [conflict, setConflict] = useState<string | null>(null);
+  const [gotoLine, setGotoLine] = useState<number | null>(null);
 
   // Refs to avoid stale closures in callbacks.
   const openFilesRef = useRef(openFiles);
@@ -195,6 +200,14 @@ export function useFileEditor(serverId: string): FileEditorState & FileEditorAct
     [serverId, safeCall],
   );
 
+  const openFileAt = useCallback(
+    async (relPath: string, line: number) => {
+      await openFile(relPath);
+      setGotoLine(Math.max(1, Math.floor(line)));
+    },
+    [openFile],
+  );
+
   const closeFile = useCallback((relPath: string) => {
     setOpenFiles((prev) => {
       const next = new Map(prev);
@@ -216,11 +229,12 @@ export function useFileEditor(serverId: string): FileEditorState & FileEditorAct
   }, []);
 
   const saveFile = useCallback(
-    async (relPath: string) => {
+    async (relPath: string): Promise<boolean> => {
       const file = openFilesRef.current.get(relPath);
-      if (!file) return;
-      if (!file.isDirty) return;
+      if (!file) return false;
+      if (!file.isDirty) return true;
 
+      let succeeded = true;
       await safeCall(async () => {
         let newMtime: number;
         try {
@@ -236,8 +250,10 @@ export function useFileEditor(serverId: string): FileEditorState & FileEditorAct
           // conflict prompt instead of overwriting — the user decides.
           if (msg.startsWith("conflict:")) {
             setConflict(relPath);
+            succeeded = false;
             return;
           }
+          succeeded = false;
           throw e;
         }
         setOpenFiles((prev) => {
@@ -255,6 +271,7 @@ export function useFileEditor(serverId: string): FileEditorState & FileEditorAct
         });
         setConflict(null);
       });
+      return succeeded;
     },
     [serverId, safeCall],
   );
@@ -453,8 +470,10 @@ export function useFileEditor(serverId: string): FileEditorState & FileEditorAct
     tabs,
     activeFileData,
     conflict,
+    gotoLine,
     // Actions
     openFile,
+    openFileAt,
     closeFile,
     setActiveFile,
     saveFile,

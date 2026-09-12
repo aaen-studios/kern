@@ -41,11 +41,9 @@ export function useLogActivity(serverId: string | null): number {
 
   // Decay loop: converts the accumulated window count into a smoothed activity
   // value. Runs on a fixed cadence so the fade looks steady regardless of how
-  // bursty the log stream is.
+  // bursty the log stream is. While the window is hidden we keep decaying but
+  // skip the state update so a backgrounded app isn't re-rendering forever.
   useEffect(() => {
-    let raf = 0;
-    let interval: ReturnType<typeof setInterval> | undefined;
-
     const tick = () => {
       const burst = windowCountRef.current;
       windowCountRef.current = 0;
@@ -53,14 +51,11 @@ export function useLogActivity(serverId: string | null): number {
       // scaled by how often we sample (lines-per-tick → lines-per-second).
       const instant = (burst / FULL_ACTIVITY_LPS) * (1000 / REFRESH_MS);
       counterRef.current = counterRef.current * DECAY + instant;
-      setActivity(counterRef.current);
+      if (!document.hidden) setActivity(counterRef.current);
     };
 
-    interval = setInterval(tick, REFRESH_MS);
-    return () => {
-      clearInterval(interval);
-      cancelAnimationFrame(raf);
-    };
+    const interval = setInterval(tick, REFRESH_MS);
+    return () => clearInterval(interval);
   }, []);
 
   // Subscribe to the log stream for this instance and count arrivals.
@@ -74,14 +69,15 @@ export function useLogActivity(serverId: string | null): number {
 
     let disposed = false;
     let unlisten: UnlistenFn | undefined;
-    let localCount = 0;
 
     (async () => {
       try {
         const fn = await listen<string>(`log:${serverId}:stream`, () => {
           if (disposed) return;
-          localCount++;
-          windowCountRef.current = localCount;
+          // Increment the window counter (not the lifetime total — assigning
+          // the running total made the first event after each tick look like a
+          // huge burst).
+          windowCountRef.current += 1;
         });
         if (disposed) {
           fn();
@@ -97,7 +93,6 @@ export function useLogActivity(serverId: string | null): number {
       disposed = true;
       unlisten?.();
       // Reset counters so a server switch doesn't carry the old burst forward.
-      localCount = 0;
       windowCountRef.current = 0;
     };
   }, [serverId]);

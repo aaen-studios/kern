@@ -11,10 +11,19 @@
 use std::io::Read;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter};
 
 use crate::config;
 use crate::manifest;
+
+/// Hard cap on a downloaded plugin package (200 MiB). Prevents a hostile or
+/// broken registry from filling the disk through the updater.
+const MAX_PLUGIN_DOWNLOAD_BYTES: u64 = 200 * 1024 * 1024;
+
+/// Global timeout for registry HTTP requests, so a hung server can't wedge the
+/// app (Tauri runs these commands synchronously).
+const REGISTRY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// The marketplace plugin row.
 ///
@@ -79,7 +88,18 @@ fn base_url(app_handle: &AppHandle) -> String {
 
 /// GET /api/plugins — list + optional search/filter.
 #[tauri::command]
-pub fn registry_list_plugins(
+pub async fn registry_list_plugins(
+    app_handle: AppHandle,
+    q: Option<String>,
+    category: Option<String>,
+    sort: Option<String>,
+) -> Result<Vec<RegistryPlugin>, String> {
+    tauri::async_runtime::spawn_blocking(move || registry_list_plugins_blocking(app_handle, q, category, sort))
+        .await
+        .map_err(|e| format!("registry task failed: {e}"))?
+}
+
+fn registry_list_plugins_blocking(
     app_handle: AppHandle,
     q: Option<String>,
     category: Option<String>,
@@ -102,6 +122,9 @@ pub fn registry_list_plugins(
         url.push_str(&params.join("&"));
     }
     let resp = ureq::get(&url)
+        .config()
+        .timeout_global(Some(REGISTRY_TIMEOUT))
+        .build()
         .call()
         .map_err(|e| format!("registry request failed: {e}"))?;
     let body = resp.into_body();
@@ -116,13 +139,25 @@ pub fn registry_list_plugins(
 
 /// GET /api/plugins/:slug — single plugin detail.
 #[tauri::command]
-pub fn registry_get_plugin(
+pub async fn registry_get_plugin(
+    app_handle: AppHandle,
+    slug: String,
+) -> Result<RegistryPlugin, String> {
+    tauri::async_runtime::spawn_blocking(move || registry_get_plugin_blocking(app_handle, slug))
+        .await
+        .map_err(|e| format!("registry task failed: {e}"))?
+}
+
+fn registry_get_plugin_blocking(
     app_handle: AppHandle,
     slug: String,
 ) -> Result<RegistryPlugin, String> {
     let base = base_url(&app_handle);
     let url = format!("{base}/api/plugins/{}", urlenc(&slug));
     let resp = ureq::get(&url)
+        .config()
+        .timeout_global(Some(REGISTRY_TIMEOUT))
+        .build()
         .call()
         .map_err(|e| format!("registry request failed: {e}"))?;
     let body = resp.into_body();
@@ -142,13 +177,29 @@ pub fn registry_get_plugin(
 /// Emits `download:{progress_id}:progress` during the download so the UI can
 /// show a progress bar, mirroring `download::download_url`.
 #[tauri::command]
-pub fn registry_install_plugin(
+pub async fn registry_install_plugin(
     app_handle: AppHandle,
     slug: String,
     version: String,
     progress_id: String,
+    expected_sha256: Option<String>,
+) -> Result<manifest::Manifest, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        registry_install_plugin_blocking(app_handle, slug, version, progress_id, expected_sha256)
+    })
+    .await
+    .map_err(|e| format!("registry task failed: {e}"))?
+}
+
+fn registry_install_plugin_blocking(
+    app_handle: AppHandle,
+    slug: String,
+    version: String,
+    progress_id: String,
+    expected_sha256: Option<String>,
 ) -> Result<manifest::Manifest, String> {
     use crate::commands;
+    use crate::paths;
 
     let base = base_url(&app_handle);
     let download_url = format!(
@@ -160,9 +211,16 @@ pub fn registry_install_plugin(
     // Stream to a temp .kern file, following the 302 redirect (ureq follows by default).
     let temp_dir = tempfile::tempdir()
         .map_err(|e| format!("failed to create temp dir: {e}"))?;
-    let dest = temp_dir.path().join(format!("{slug}-{version}.kern"));
+    // The temp file name is derived from remote data — keep it a bare,
+    // traversal-free file name.
+    let file_name = paths::safe_file_name(&format!("{slug}-{version}.kern"))
+        .map_err(|_| format!("registry returned an unsafe slug/version ('{slug}' {version})"))?;
+    let dest = temp_dir.path().join(file_name);
 
     let resp = ureq::get(&download_url)
+        .config()
+        .timeout_global(Some(REGISTRY_TIMEOUT))
+        .build()
         .call()
         .map_err(|e| format!("download request failed: {e}"))?;
     let total = resp
@@ -172,11 +230,18 @@ pub fn registry_install_plugin(
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(0);
 
+    if total > MAX_PLUGIN_DOWNLOAD_BYTES {
+        return Err(format!(
+            "plugin package is too large ({total} bytes) — refusing to download"
+        ));
+    }
+
     let mut file = std::fs::File::create(&dest)
         .map_err(|e| format!("failed to create temp file: {e}"))?;
     let mut reader = resp.into_body().into_reader();
     let mut buf = [0u8; 8192];
     let mut bytes: u64 = 0;
+    let mut hasher = Sha256::new();
     loop {
         let n = reader
             .read(&mut buf)
@@ -184,15 +249,37 @@ pub fn registry_install_plugin(
         if n == 0 {
             break;
         }
+        bytes += n as u64;
+        if bytes > MAX_PLUGIN_DOWNLOAD_BYTES {
+            return Err(format!(
+                "plugin package exceeded the {MAX_PLUGIN_DOWNLOAD_BYTES} byte limit — aborting download"
+            ));
+        }
+        hasher.update(&buf[..n]);
         std::io::Write::write_all(&mut file, &buf[..n])
             .map_err(|e| format!("temp write failed: {e}"))?;
-        bytes += n as u64;
         let _ = app_handle.emit(
             &format!("download:{progress_id}:progress"),
             serde_json::json!({ "bytes": bytes, "total": total }),
         );
     }
     drop(file);
+
+    // Integrity: when the registry advertises a checksum, enforce it. This
+    // protects against corrupted downloads and a tampered mirror/CDN; the
+    // package is still trusted code at install time.
+    if let Some(expected) = expected_sha256
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let actual = format!("{:x}", hasher.finalize());
+        if !actual.eq_ignore_ascii_case(expected) {
+            return Err(format!(
+                "checksum mismatch for '{slug}' (expected {expected}, got {actual}) — refusing to install"
+            ));
+        }
+    }
 
     // Install the downloaded package, then bump the registry install counter.
     let manifest =

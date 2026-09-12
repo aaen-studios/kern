@@ -14,6 +14,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::manifest::{Manifest, ScaffoldFile};
+use crate::paths;
 use crate::process;
 
 /// Writes the plugin's scaffold files into `instance_dir`.
@@ -58,31 +59,21 @@ fn write_one(
     overrides: &HashMap<String, String>,
 ) -> Result<(), String> {
     let rel = process::resolve_variables(&file.path, overrides);
-    let target = instance_dir.join(rel);
 
     // Traversal guard: a malicious plugin manifest could set `path` to
     // "../../.ssh/authorized_keys" and write outside the instance dir.
-    // Canonicalize both and confirm the target stays under the instance root.
-    // We check the parent when the target doesn't exist yet (so it can be
-    // created safely), and the target itself when it does.
-    let canonical_root = instance_dir
-        .canonicalize()
-        .map_err(|e| format!("cannot resolve instance dir: {e}"))?;
-    let check_base = if target.exists() {
-        target.canonicalize().unwrap_or_else(|_| target.clone())
-    } else {
-        // Resolve via the parent so canonicalize works on a real path.
-        let parent = target.parent().unwrap_or(instance_dir);
-        let canonical_parent = parent.canonicalize().unwrap_or_else(|_| parent.to_path_buf());
-        canonical_parent.join(target.file_name().unwrap_or_default())
+    // `paths::safe_join` rejects absolute paths and `..` escapes lexically,
+    // works for not-yet-existing files, and is symlink-aware.
+    let target = match paths::safe_join(instance_dir, &rel) {
+        Ok(target) => target,
+        Err(e) => {
+            eprintln!(
+                "[scaffold] refusing to write '{}' — {e}",
+                file.path
+            );
+            return Ok(()); // skip, don't fail the whole scaffold
+        }
     };
-    if !check_base.starts_with(&canonical_root) {
-        eprintln!(
-            "[scaffold] refusing to write '{}' — escapes instance directory",
-            file.path
-        );
-        return Ok(()); // skip, don't fail the whole scaffold
-    }
 
     // Don't clobber existing files — respect the user's edits.
     if target.exists() {

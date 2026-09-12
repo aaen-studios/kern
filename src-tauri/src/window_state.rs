@@ -9,7 +9,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, PhysicalPosition, WebviewWindow};
+use tauri::{AppHandle, PhysicalPosition, WebviewWindow};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WindowState {
@@ -27,11 +27,7 @@ pub struct WindowState {
 }
 
 fn state_path(app_handle: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app_handle
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("failed to resolve app data dir: {e}"))?;
-    Ok(dir.join("window.json"))
+    Ok(crate::config::config_dir(app_handle)?.join("window.json"))
 }
 
 /// Loads persisted window state, if any.

@@ -1,6 +1,13 @@
 import { useEffect, useState } from "react";
 import { useSettings } from "../../hooks/useSettings";
-import type { AppSettings } from "../../types/server";
+import { setNativeNotificationsEnabled } from "../../lib/nativeNotifications";
+import type { AppSettings, LogAlertRule } from "../../types/server";
+import { UpdateCheckRow } from "./UpdateCheckRow";
+import { SyncControls } from "./SyncControls";
+import { WebRemotePairing } from "./WebRemotePairing";
+import { AutomationPanel } from "./AutomationPanel";
+import { LogAlertsEditor } from "./LogAlertsEditor";
+import { AuditLogPanel } from "./AuditLogPanel";
 
 interface SettingsViewProps {
   /** Called when the user wants to go back to the server list. */
@@ -32,7 +39,16 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     }
   }
 
-  async function handleSetting(key: "closeToTray" | "startHiddenInTray" | "webRemoteEnabled", value: boolean) {
+  async function handleSetting(
+    key:
+      | "closeToTray"
+      | "startHiddenInTray"
+      | "webRemoteEnabled"
+      | "nativeNotifications"
+      | "webhookEnabled"
+      | "automationEnabled",
+    value: boolean,
+  ) {
     if (!settings) return;
     setActionError(null);
     try {
@@ -139,6 +155,44 @@ export function SettingsView({ onBack }: SettingsViewProps) {
               </p>
             </section>
 
+            {/* ── Notifications & alerts ──────────────────────────────── */}
+            <section>
+              <h3 className="text-[10px] tracking-[0.2em] uppercase text-zinc-500 mb-3">
+                notifications &amp; alerts
+              </h3>
+              <div className="space-y-1 border border-grid-bounds">
+                <ToggleRow
+                  label="Native OS notifications"
+                  description="Mirror notifications (crashes, backups, health alerts) to system toasts when kern isn't focused. Turn off for Do Not Disturb."
+                  checked={settings.nativeNotifications !== false}
+                  onChange={(v) => {
+                    setNativeNotificationsEnabled(v);
+                    void handleSetting("nativeNotifications", v);
+                  }}
+                />
+                <Divider />
+                <ToggleRow
+                  label="Send webhook events"
+                  description="POST every notification as JSON to the URL below — compatible with Discord and Slack incoming webhooks."
+                  checked={!!settings.webhookEnabled}
+                  onChange={(v) => void handleSetting("webhookEnabled", v)}
+                />
+                <Divider />
+                <InputRow
+                  label="Webhook URL"
+                  description="Discord/Slack/generic endpoint. Delivery is best-effort with a 10-second timeout."
+                  value={settings.webhookUrl ?? ""}
+                  onCommit={(v) => void handleStringSetting("webhookUrl", v)}
+                  mono
+                />
+                <Divider />
+                <LogAlertsEditor
+                  rules={settings.logAlerts ?? []}
+                  onChange={(rules: LogAlertRule[]) => void update({ logAlerts: rules })}
+                />
+              </div>
+            </section>
+
             {/* ── Power / cost section ────────────────────────────────── */}
             <section>
               <h3 className="text-[10px] tracking-[0.2em] uppercase text-zinc-500 mb-3">
@@ -160,6 +214,16 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                   onCommit={(v) => void handleNumberSetting("machineWatts", parseFloat(v) || 120)}
                   type="number"
                 />
+              </div>
+            </section>
+
+            {/* ── Updates section ─────────────────────────────────────── */}
+            <section>
+              <h3 className="text-[10px] tracking-[0.2em] uppercase text-zinc-500 mb-3">
+                updates
+              </h3>
+              <div className="space-y-1 border border-grid-bounds">
+                <UpdateCheckRow />
               </div>
             </section>
 
@@ -186,21 +250,24 @@ export function SettingsView({ onBack }: SettingsViewProps) {
               <div className="space-y-1 border border-grid-bounds">
                 <ToggleRow
                   label="Enable web remote"
-                  description="Serve a read-mostly JSON API on port 7440 so a phone (or anything on your LAN) can view status and start/stop servers. Requires a restart to take effect."
+                  description="Serve a mobile control panel over self-signed HTTPS on the LAN: status, start/stop/restart, and live logs. Pair by scanning the QR code. Requires a restart to take effect."
                   checked={!!settings.webRemoteEnabled}
                   onChange={(v) => void handleSetting("webRemoteEnabled", v)}
                 />
                 <Divider />
                 <InputRow
-                  label="Passphrase"
-                  description="Required to access the remote (send as: Authorization: Bearer <passphrase>). Leave empty for open access on your LAN."
-                  value={settings.webRemotePassphrase ?? ""}
-                  onCommit={(v) => void handleStringSetting("webRemotePassphrase", v)}
-                  mono
+                  label="HTTPS port"
+                  description="Port for the web remote (default 7440). Changing it requires a restart."
+                  value={String(settings.webRemotePort ?? 7440)}
+                  onCommit={(v) => void handleNumberSetting("webRemotePort", parseInt(v) || 7440)}
+                  type="number"
                 />
+                <Divider />
+                <WebRemotePairing enabled={!!settings.webRemoteEnabled} />
               </div>
               <p className="mt-2 text-[11px] text-zinc-600">
-                When enabled, reach the API at <span className="font-mono text-zinc-400">http://&lt;this-machine&gt;:7440/servers</span>.
+                Access is token-protected; the token is stored in the OS
+                credential vault and can be rotated above.
               </p>
             </section>
 
@@ -217,7 +284,49 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                   onCommit={(v) => void handleStringSetting("syncRepoUrl", v)}
                   mono
                 />
+                <Divider />
+                <SyncControls />
               </div>
+            </section>
+
+            {/* ── Automation / CLI ────────────────────────────────────── */}
+            <section>
+              <h3 className="text-[10px] tracking-[0.2em] uppercase text-zinc-500 mb-3">
+                automation &amp; cli
+              </h3>
+              <div className="space-y-1 border border-grid-bounds">
+                <ToggleRow
+                  label="Enable the automation API"
+                  description="Serve a loopback-only (127.0.0.1) JSON API for kern-cli and scripts — start/stop/restart, logs, and stdin. Never exposed to the network."
+                  checked={settings.automationEnabled !== false}
+                  onChange={(v) => void handleSetting("automationEnabled", v)}
+                />
+                <Divider />
+                <InputRow
+                  label="Automation port"
+                  description="Port on 127.0.0.1 (default 7442). Changing it requires an app restart."
+                  value={String(settings.automationPort ?? 7442)}
+                  onCommit={(v) => void handleNumberSetting("automationPort", parseInt(v) || 7442)}
+                  type="number"
+                />
+                <Divider />
+                <AutomationPanel />
+              </div>
+            </section>
+
+            {/* ── Activity / audit log ────────────────────────────────── */}
+            <section>
+              <h3 className="text-[10px] tracking-[0.2em] uppercase text-zinc-500 mb-3">
+                activity log
+              </h3>
+              <div className="space-y-1 border border-grid-bounds">
+                <AuditLogPanel />
+              </div>
+              <p className="mt-2 text-[11px] text-zinc-600">
+                Records starts/stops, config changes, plugin installs, backups,
+                task runs, and restart announcements. Stored locally in the app
+                data folder; export any time above.
+              </p>
             </section>
           </div>
         </div>
@@ -274,7 +383,7 @@ interface InputRowProps {
   value: string;
   /** Fired when the field loses focus (Enter / blur) with the latest value. */
   onCommit: (value: string) => void;
-  type?: "text" | "number";
+  type?: "text" | "number" | "password";
   mono?: boolean;
 }
 

@@ -1,10 +1,13 @@
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
+import { NotificationBell } from "./NotificationBell";
 
 interface TitleBarProps {
   /** Navigate to the home / server-list view. */
   onHome?: () => void;
+  /** Open a server from a notification. */
+  onOpenServer?: (id: string) => void;
 }
 
 /**
@@ -15,7 +18,7 @@ interface TitleBarProps {
  * buttons driving `getCurrentWindow()`. The whole bar is `user-select:none`
  * so dragging never selects text.
  */
-export function TitleBar({ onHome }: TitleBarProps) {
+export function TitleBar({ onHome, onOpenServer }: TitleBarProps) {
   const win = getCurrentWindow();
   const [maximized, setMaximized] = useState(false);
 
@@ -67,7 +70,8 @@ export function TitleBar({ onHome }: TitleBarProps) {
         </span>
       </div>
 
-      <div className="absolute right-1 top-1/2 -translate-y-1/2 flex">
+      <div className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center">
+        <NotificationBell onOpenServer={onOpenServer} />
         <ControlButton
           label="minimize"
           onClick={() => void win.minimize()}

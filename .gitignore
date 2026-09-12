@@ -23,6 +23,9 @@ src-tauri/.env
 update.json
 update.json.prev
 
+# Staged release assets (produced by deploy.sh, uploaded by the release workflow)
+release-assets/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

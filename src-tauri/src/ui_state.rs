@@ -11,15 +11,11 @@ use std::fs;
 use std::path::PathBuf;
 
 use serde_json::Value;
-use tauri::{AppHandle, Manager, command};
+use tauri::{AppHandle, command};
 
 /// Absolute path to ui_state.json.
 fn state_path(app_handle: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app_handle
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("failed to resolve app data dir: {e}"))?;
-    Ok(dir.join("ui_state.json"))
+    Ok(crate::config::config_dir(app_handle)?.join("ui_state.json"))
 }
 
 /// Loads persisted UI state, if any. Returns Ok(None) when the file is

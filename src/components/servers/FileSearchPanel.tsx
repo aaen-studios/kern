@@ -18,7 +18,7 @@ interface FileSearchPanelProps {
   /** Server instance id. */
   serverId: string;
   /** Callback when a file should be opened from search results. */
-  onOpenFile: (relPath: string) => void;
+  onOpenFile: (relPath: string, line?: number | null) => void;
   /** Called when the user dismisses the search popup (Esc / close button). */
   onClose: () => void;
 }
@@ -86,8 +86,8 @@ export function FileSearchPanel({ serverId, onOpenFile, onClose }: FileSearchPan
     };
   }, [query, performSearch]);
 
-  const handleResultClick = useCallback((relPath: string) => {
-    onOpenFile(relPath);
+  const handleResultClick = useCallback((match: SearchMatch) => {
+    onOpenFile(match.relPath, match.lineNumber);
     onClose();
   }, [onOpenFile, onClose]);
 
@@ -151,7 +151,7 @@ export function FileSearchPanel({ serverId, onOpenFile, onClose }: FileSearchPan
         {results.map((match) => (
           <button
             key={`${match.relPath}:${match.lineNumber ?? ""}`}
-            onClick={() => handleResultClick(match.relPath)}
+            onClick={() => handleResultClick(match)}
             className="w-full text-left px-3 py-1.5 hover:bg-bg-surface transition-colors border-b border-grid-bounds last:border-0"
           >
             <p className="text-[11px] text-zinc-400 truncate font-mono">{match.relPath}</p>

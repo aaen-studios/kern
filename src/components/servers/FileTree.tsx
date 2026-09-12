@@ -152,6 +152,7 @@ export function FileTree({
   const [rootEntries, setRootEntries] = useState<FileEntry[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [rootError, setRootError] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
@@ -186,14 +187,18 @@ export function FileTree({
     let cancelled = false;
     const load = async () => {
       setLoading(true);
+      setRootError(null);
       try {
         const entries = await onListDirectory("");
         if (!cancelled) {
           setRootEntries(entries);
           setLoaded(true);
         }
-      } catch {
-        if (!cancelled) setRootEntries([]);
+      } catch (e) {
+        if (!cancelled) {
+          setRootEntries([]);
+          setRootError(e instanceof Error ? e.message : String(e));
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -393,6 +398,17 @@ export function FileTree({
     return (
       <div className="flex-1 overflow-y-auto bg-bg-core p-3">
         <p className="text-[11px] text-zinc-600">loading…</p>
+      </div>
+    );
+  }
+
+  if (rootError && rootEntries.length === 0 && !createState) {
+    return (
+      <div className="flex-1 overflow-y-auto bg-bg-core p-3 select-none">
+        <p className="text-[11px] text-fault-vector break-words">
+          could not list this directory
+        </p>
+        <p className="mt-1 text-[10px] text-zinc-600 break-words">{rootError}</p>
       </div>
     );
   }

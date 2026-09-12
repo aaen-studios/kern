@@ -12,21 +12,15 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use walkdir::WalkDir;
 
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_autostart::ManagerExt;
 
 use crate::config::{self, AppConfig, AppSettings, ServerInstance};
 use crate::manifest;
 use crate::metrics::{InstanceMetrics, MetricSample, MetricsHistory, MetricsState};
+use crate::paths;
 use crate::process;
 use crate::scaffold;
-
-/// How long to wait for a graceful shutdown before falling back to a hard kill.
-///
-/// 15s comfortably covers a Minecraft world save on typical hardware (chunk
-/// flush + level.dat write), while still bounding the wait if the process is
-/// hung or unresponsive — so the stop button never gets stuck.
-const GRACEFUL_STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// Returns the full config document, with `is_orphaned` refreshed on read.
 #[tauri::command]
@@ -53,6 +47,14 @@ pub struct NewServerInput {
     pub user_overrides: HashMap<String, String>,
     #[serde(default)]
     pub auto_start: bool,
+    #[serde(default)]
+    pub group: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// True when adopting an existing folder (import wizard): skip plugin
+    /// scaffolding so nothing is added to a folder the user already populated.
+    #[serde(default)]
+    pub imported: bool,
 }
 
 /// Creates a new server instance and returns the persisted record (with its
@@ -69,7 +71,7 @@ pub fn create_server(
     let mut cfg = config::load_config(&app_handle)?;
 
     let instance = ServerInstance {
-        id: config::generate_id(),
+        id: config::generate_unique_id(&cfg.servers),
         name: input.name,
         server_type: input.server_type,
         path: input.path.clone(),
@@ -78,25 +80,52 @@ pub fn create_server(
         user_overrides: input.user_overrides.clone(),
         auto_start: input.auto_start,
         pid: None,
+        pid_started: None,
+        stop_command: None,
+        stop_timeout_secs: config::default_stop_timeout_secs(),
+        features: HashMap::new(),
+        watchdog: config::WatchdogConfig::default(),
+        tasks: Vec::new(),
+        group: input.group.filter(|g| !g.trim().is_empty()),
+        tags: input
+            .tags
+            .into_iter()
+            .map(|t| t.trim().to_lowercase())
+            .filter(|t| !t.is_empty())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect(),
+        rcon: config::RconConfig::default(),
         backup_schedule: config::BackupSchedule::default(),
         alert_rules: config::AlertRules::default(),
         command_history: Vec::new(),
         command_snippets: Vec::new(),
+        last_ports: Vec::new(),
     };
 
     cfg.servers.insert(instance.id.clone(), instance.clone());
     config::save_config(&app_handle, &cfg)?;
+    crate::audit::record(
+        &app_handle,
+        "create",
+        &format!("created server '{}' ({})", instance.name, instance.server_type),
+        Some(&instance.id),
+    );
 
     // Scaffold starter files from the plugin manifest (if installed + declared).
     // Best-effort: a missing/unknown plugin just leaves the folder empty.
-    if let Ok(manifest_path) = manifest_path_for(&app_handle, &instance.server_type) {
-        if manifest_path.exists() {
-            if let Ok(manifest) = manifest::load(&manifest_path) {
-                scaffold::write(
-                    std::path::Path::new(&instance.path),
-                    &manifest,
-                    &instance.user_overrides,
-                );
+    // Skipped for imported folders — adopting an existing server must not add
+    // files to a directory the user already populated.
+    if !input.imported {
+        if let Ok(manifest_path) = manifest_path_for(&app_handle, &instance.server_type) {
+            if manifest_path.exists() {
+                if let Ok(manifest) = manifest::load(&manifest_path) {
+                    scaffold::write(
+                        std::path::Path::new(&instance.path),
+                        &manifest,
+                        &instance.user_overrides,
+                    );
+                }
             }
         }
     }
@@ -106,7 +135,7 @@ pub fn create_server(
     // Best-effort, never blocks creation. Skipped entirely when there are no
     // overrides — no point writing an empty file. Also skipped when a .env
     // already exists, so a pre-populated folder is never clobbered.
-    if !instance.user_overrides.is_empty() {
+    if !input.imported && !instance.user_overrides.is_empty() {
         let env_path = std::path::Path::new(&instance.path).join(".env");
         if !env_path.exists() {
             let content: String = instance
@@ -122,14 +151,17 @@ pub fn create_server(
 }
 
 /// Updates an existing instance by id. Returns an error if the id is unknown.
+///
+/// Host-owned fields (`status`, `pid`, `pid_started`, `is_orphaned`, scheduler
+/// timers) are preserved: the frontend's copy can be stale and a round-trip
+/// must not clobber a status write or a backup timer that happened since.
 #[tauri::command]
 pub fn update_server(
     app_handle: AppHandle,
     server: ServerInstance,
 ) -> Result<ServerInstance, String> {
-    let mut cfg = config::load_config(&app_handle)?;
-
-    let updated = {
+    let mut updated: Option<ServerInstance> = None;
+    config::with_config_mut(&app_handle, |cfg| {
         let entry = cfg
             .servers
             .get_mut(&server.id)
@@ -137,29 +169,77 @@ pub fn update_server(
         entry.name = server.name;
         entry.server_type = server.server_type;
         entry.path = server.path;
-        // Status is host-owned, so we keep whatever the caller sent (Phase 2
-        // will drive it from the shell lifecycle).
-        entry.status = server.status;
         entry.user_overrides = server.user_overrides;
-        entry.is_orphaned = server.is_orphaned;
         entry.auto_start = server.auto_start;
-        entry.clone()
-    };
-
-    config::save_config(&app_handle, &cfg)?;
-    Ok(updated)
+        entry.stop_command = server.stop_command;
+        entry.stop_timeout_secs = server.stop_timeout_secs;
+        entry.features = server.features;
+        entry.watchdog = server.watchdog;
+        entry.group = server.group.filter(|g| !g.trim().is_empty());
+        entry.tags = server
+            .tags
+            .into_iter()
+            .map(|t| t.trim().to_lowercase())
+            .filter(|t| !t.is_empty())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        // Preserve host-managed last-run stamps across a UI round-trip.
+        let last_runs: HashMap<String, u64> = entry
+            .tasks
+            .iter()
+            .map(|t| (t.id.clone(), t.last_run_secs))
+            .collect();
+        entry.tasks = server
+            .tasks
+            .into_iter()
+            .map(|mut t| {
+                if let Some(prev) = last_runs.get(&t.id) {
+                    t.last_run_secs = *prev;
+                }
+                t
+            })
+            .collect();
+        updated = Some(entry.clone());
+        Ok(())
+    })?;
+    updated.ok_or_else(|| format!("server '{}' not found", server.id))
 }
 
 /// Deletes an instance by id. Missing ids are treated as already-deleted (Ok).
+///
+/// A running process is stopped first — removing the record while the server
+/// runs would leave an untracked, unstoppable child holding its port.
 #[tauri::command]
-pub fn delete_server(app_handle: AppHandle, id: String) -> Result<(), String> {
-    let mut cfg = config::load_config(&app_handle)?;
-    cfg.servers.remove(&id);
-    config::save_config(&app_handle, &cfg)?;
-    // Drop accumulated metrics history for the deleted instance.
-    let history: tauri::State<'_, MetricsHistory> = app_handle.state();
-    history.forget(&id);
-    Ok(())
+pub async fn delete_server(app_handle: AppHandle, id: String) -> Result<(), String> {
+    let handle = app_handle.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let name = audit_name(&handle, &id);
+        if process::is_running(&handle, &id) || process::is_task_running(&handle, &id) {
+            stop_instance_internal(&handle, &id, false)?;
+        }
+        config::with_config_mut(&handle, |cfg| {
+            cfg.servers.remove(&id);
+            Ok(())
+        })?;
+        crate::audit::record(
+            &handle,
+            "delete",
+            &format!("deleted server '{name}'"),
+            Some(&id),
+        );
+        // Drop the filesystem watch so a deleted instance doesn't leak a
+        // watcher on its old directory.
+        crate::watcher::unwatch_instance(&handle, &id);
+        // Drop the RCON credential too.
+        crate::rcon::clear_password(&id);
+        // Drop accumulated metrics history for the deleted instance.
+        let history: tauri::State<'_, MetricsHistory> = handle.state();
+        history.forget(&id);
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("delete task failed: {e}"))?
 }
 
 /// Deletes an instance's working directory from disk. Best-effort — missing
@@ -172,6 +252,13 @@ pub fn delete_server_folder(app_handle: AppHandle, id: String) -> Result<(), Str
         .servers
         .get(&id)
         .ok_or_else(|| format!("server '{id}' not found"))?;
+    // Never delete a directory out from under a live process: files would fail
+    // mid-write and the server would keep running from an unlinked tree.
+    if process::is_running(&app_handle, &id) || process::is_task_running(&app_handle, &id) {
+        return Err(format!(
+            "cannot delete the working directory for '{id}' while it is running — stop it first"
+        ));
+    }
     let path = std::path::Path::new(&instance.path);
     if path.exists() {
         std::fs::remove_dir_all(path)
@@ -214,12 +301,12 @@ pub fn is_server_running(app_handle: AppHandle, id: String) -> bool {
 /// persisted state when a process exits or errors.
 #[tauri::command]
 pub fn update_server_status(app_handle: AppHandle, id: String, status: String) -> Result<(), String> {
-    let mut cfg = config::load_config(&app_handle)?;
-    if let Some(instance) = cfg.servers.get_mut(&id) {
-        instance.status = status;
-        config::save_config(&app_handle, &cfg)?;
-    }
-    Ok(())
+    config::with_config_mut(&app_handle, |cfg| {
+        if let Some(instance) = cfg.servers.get_mut(&id) {
+            instance.status = status;
+        }
+        Ok(())
+    })
 }
 
 /// Replaces the persisted global app settings (launch-on-login, close-to-tray,
@@ -229,9 +316,15 @@ pub fn update_app_settings(
     app_handle: AppHandle,
     settings: AppSettings,
 ) -> Result<(), String> {
-    let mut cfg = config::load_config(&app_handle)?;
-    cfg.settings = settings;
-    config::save_config(&app_handle, &cfg)
+    config::with_config_mut(&app_handle, |cfg| {
+        cfg.settings = settings;
+        Ok(())
+    })?;
+    // Log-alert rules are compiled from settings — recompile immediately so a
+    // save takes effect without an app restart.
+    crate::logwatch::reload(&app_handle);
+    crate::audit::record(&app_handle, "settings", "updated app settings", None);
+    Ok(())
 }
 
 /// Registers kern as an OS-login launch item (Windows Run key / Linux
@@ -243,19 +336,24 @@ pub fn enable_autostart(app_handle: AppHandle) -> Result<(), String> {
         .autolaunch()
         .enable()
         .map_err(|e| format!("failed to enable autostart: {e}"))?;
-    let mut cfg = config::load_config(&app_handle)?;
-    cfg.settings.launch_on_login = true;
-    config::save_config(&app_handle, &cfg)
+    config::with_config_mut(&app_handle, |cfg| {
+        cfg.settings.launch_on_login = true;
+        Ok(())
+    })
 }
 
 /// Removes the OS-login launch item. The persisted flag is cleared even if the
 /// OS entry was already gone, so the UI never shows a stale "enabled" state.
 #[tauri::command]
 pub fn disable_autostart(app_handle: AppHandle) -> Result<(), String> {
-    let _ = app_handle.autolaunch().disable();
-    let mut cfg = config::load_config(&app_handle)?;
-    cfg.settings.launch_on_login = false;
-    config::save_config(&app_handle, &cfg)
+    app_handle
+        .autolaunch()
+        .disable()
+        .map_err(|e| format!("failed to disable autostart: {e}"))?;
+    config::with_config_mut(&app_handle, |cfg| {
+        cfg.settings.launch_on_login = false;
+        Ok(())
+    })
 }
 
 /// Reports whether the OS-login launch item is currently registered. Reads the
@@ -367,19 +465,67 @@ pub struct ListeningPort {
 /// Used by the port viewer / quick-connect feature so the user can copy a
 /// join link without reading logs.
 #[tauri::command]
-pub fn get_instance_ports(app_handle: AppHandle, id: String) -> Result<Vec<ListeningPort>, String> {
-    use sysinfo::{Pid, ProcessesToUpdate};
+pub async fn get_instance_ports(app_handle: AppHandle, id: String) -> Result<Vec<ListeningPort>, String> {
+    tauri::async_runtime::spawn_blocking(move || get_instance_ports_blocking(app_handle, id))
+        .await
+        .map_err(|e| format!("ports task failed: {e}"))?
+}
+
+fn get_instance_ports_blocking(app_handle: AppHandle, id: String) -> Result<Vec<ListeningPort>, String> {
     let Some(root_pid) = process::pid_for(&app_handle, &id) else {
         return Ok(Vec::new());
     };
+    let tree = instance_tree_pids(&app_handle, root_pid);
+
+    // Query the OS socket table and keep listening TCP ports whose owning PID
+    // is in the instance's process tree.
+    let listening_lines = query_listening_sockets();
+    let mut ports: std::collections::BTreeSet<u16> = std::collections::BTreeSet::new();
+    for (pid, port) in listening_lines {
+        if tree.contains(&pid) {
+            ports.insert(port);
+        }
+    }
+
+    let result: Vec<ListeningPort> = ports
+        .into_iter()
+        .map(|p| ListeningPort {
+            port: p,
+            connect: format!("localhost:{p}"),
+        })
+        .collect();
+
+    // Remember them for the next pre-start conflict check (best-effort: a
+    // config write failure must not fail the port query itself).
+    if !result.is_empty() {
+        let port_list: Vec<u16> = result.iter().map(|p| p.port).collect();
+        let h = app_handle.clone();
+        let id_owned = id.clone();
+        let _ = config::with_config_mut(&h, |cfg| {
+            if let Some(instance) = cfg.servers.get_mut(&id_owned) {
+                instance.last_ports = port_list;
+            }
+            Ok(())
+        });
+    }
+    Ok(result)
+}
+
+/// Collects the pid set of an instance's process tree (root + all descendants).
+/// Read under the metrics lock (which owns the refreshed process table), then
+/// released before any slow OS calls.
+pub(crate) fn instance_tree_pids(
+    app_handle: &AppHandle,
+    root_pid: u32,
+) -> std::collections::HashSet<u32> {
+    use sysinfo::{Pid, ProcessesToUpdate};
+
     let state: tauri::State<'_, MetricsState> = app_handle.state();
+    let mut tree: std::collections::HashSet<u32> = std::collections::HashSet::new();
     let Ok(mut sys) = state.0.lock() else {
-        return Ok(Vec::new());
+        return tree;
     };
     sys.refresh_processes(ProcessesToUpdate::All, true);
-
-    // Collect the full descendant set starting from root_pid.
-    let mut tree: std::collections::HashSet<u32> = std::collections::HashSet::new();
     tree.insert(root_pid);
     loop {
         let mut grew = false;
@@ -398,42 +544,129 @@ pub fn get_instance_ports(app_handle: AppHandle, id: String) -> Result<Vec<Liste
             break;
         }
     }
+    tree
+}
 
-    // Query the OS socket table and keep listening TCP ports whose owning PID
-    // is in the instance's process tree.
-    let listening_lines = query_listening_sockets();
-    let mut ports: std::collections::BTreeSet<u16> = std::collections::BTreeSet::new();
-    for (pid, port) in listening_lines {
-        if tree.contains(&pid) {
-            ports.insert(port);
+/// One port held by another process, reported by the pre-start check.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortConflict {
+    pub port: u16,
+    pub pid: u32,
+    pub process: String,
+}
+
+/// Pre-start findings shown to the user before a launch is confirmed.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreflightReport {
+    pub conflicts: Vec<PortConflict>,
+    /// `eula.txt` exists and still says `eula=false` (Minecraft).
+    pub eula_pending: bool,
+    /// Free space is below the warning floor.
+    pub low_disk: bool,
+    pub free_mb: Option<u64>,
+}
+
+/// Free-space floor below which a start shows a warning (200 MiB).
+const LOW_DISK_BYTES: u64 = 200 * 1024 * 1024;
+
+/// Checks a few things that commonly make a launch fail or surprise the user:
+/// ports the instance used last time now held by another process, a pending
+/// Minecraft EULA, and a nearly-full disk. Read-only.
+#[tauri::command]
+pub fn preflight_launch(app_handle: AppHandle, id: String) -> Result<PreflightReport, String> {
+    let cfg = config::load_config(&app_handle)?;
+    let instance = cfg
+        .servers
+        .get(&id)
+        .ok_or_else(|| format!("server '{id}' not found"))?;
+
+    // Ports: compare the last-observed set against the live socket table.
+    let own_pids: std::collections::HashSet<u32> = process::pid_for(&app_handle, &id)
+        .map(|root| instance_tree_pids(&app_handle, root))
+        .unwrap_or_default();
+    let listening = query_listening_sockets();
+    let conflicts_raw = find_port_conflicts(&instance.last_ports, &listening, &own_pids);
+
+    let conflicts = if conflicts_raw.is_empty() {
+        Vec::new()
+    } else {
+        use sysinfo::{Pid, ProcessesToUpdate};
+        let pids: Vec<Pid> = conflicts_raw.iter().map(|(_, p)| Pid::from_u32(*p)).collect();
+        let mut sys = sysinfo::System::new();
+        sys.refresh_processes(ProcessesToUpdate::Some(&pids), true);
+        conflicts_raw
+            .into_iter()
+            .map(|(port, pid)| {
+                let process = sys
+                    .process(Pid::from_u32(pid))
+                    .map(|p| p.name().to_string_lossy().to_string())
+                    .unwrap_or_else(|| "unknown".to_string());
+                PortConflict { port, pid, process }
+            })
+            .collect()
+    };
+
+    // Minecraft EULA helper: an existing `eula=false` means the server will
+    // refuse to start until it's accepted.
+    let eula_path = std::path::Path::new(&instance.path).join("eula.txt");
+    let eula_pending = std::fs::read_to_string(&eula_path)
+        .map(|raw| eula_declined(&raw))
+        .unwrap_or(false);
+
+    let free = crate::disk::available_space_for(std::path::Path::new(&instance.path));
+    Ok(PreflightReport {
+        conflicts,
+        eula_pending,
+        low_disk: free.is_some_and(|bytes| bytes < LOW_DISK_BYTES),
+        free_mb: free.map(|bytes| bytes / (1024 * 1024)),
+    })
+}
+
+/// Pure conflict finder: known ports held by pids outside the instance's own
+/// tree. Sorted + deduped so the dialog order is stable.
+fn find_port_conflicts(
+    known: &[u16],
+    listening: &[(u32, u16)],
+    own: &std::collections::HashSet<u32>,
+) -> Vec<(u16, u32)> {
+    let mut out: Vec<(u16, u32)> = Vec::new();
+    for port in known {
+        for (pid, lport) in listening {
+            if lport == port && !own.contains(pid) {
+                out.push((*port, *pid));
+                break;
+            }
         }
     }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
 
-    let result = ports
-        .into_iter()
-        .map(|p| ListeningPort {
-            port: p,
-            connect: format!("localhost:{p}"),
-        })
-        .collect();
-    Ok(result)
+/// True when an eula.txt body declares `eula=false` (case-insensitive).
+fn eula_declined(content: &str) -> bool {
+    content.lines().any(|line| {
+        let lower = line.trim().to_ascii_lowercase();
+        lower.starts_with("eula") && lower.contains('=') && lower.contains("false")
+    })
 }
 
 /// Runs `netstat -ano` (Windows) / `ss -tlnp` (Linux) / `lsof -iTCP -sTCP:LISTEN`
 /// (macOS) and returns `(pid, local_listening_port)` pairs. Best-effort: an
 /// empty Vec on any parse failure.
 fn query_listening_sockets() -> Vec<(u32, u16)> {
-    use std::process::Command;
     let out = if cfg!(target_os = "windows") {
-        Command::new("netstat")
+        process::silent_command("netstat")
             .args(["-ano", "-p", "TCP"])
             .output()
     } else if cfg!(target_os = "macos") {
-        Command::new("lsof")
+        process::silent_command("lsof")
             .args(["-nP", "-iTCP", "-sTCP:LISTEN"])
             .output()
     } else {
-        Command::new("ss").args(["-tlnp"]).output()
+        process::silent_command("ss").args(["-tlnp"]).output()
     };
     let Ok(out) = out else {
         return Vec::new();
@@ -463,21 +696,22 @@ fn parse_listening(text: &str) -> Vec<(u32, u16)> {
 }
 
 /// Pulls the local listening port out of a netstat/ss/lsof line.
+///
+/// The **first** address-like token carrying a `:port` is the local endpoint;
+/// taking the last match would grab netstat's foreign address (`0.0.0.0:0`)
+/// and report port 0 for every server, which is the bug this fixes.
 fn extract_port(line: &str) -> Option<u16> {
     // Address forms: "0.0.0.0:25565", "[::]:25565", "*:25565".
-    // Find the last ":NNNN" that isn't the pid column.
-    let mut last: Option<u16> = None;
     for tok in line.split_whitespace() {
-        if let Some(idx) = tok.rfind(':') {
-            if let Ok(p) = tok[idx + 1..].trim_end_matches(']').parse::<u16>() {
-                // Heuristic: ports are <= 65535 and the addr token contains a dot or colon-bracket.
-                if tok.contains('.') || tok.contains('[') || tok.contains('*') {
-                    last = Some(p);
-                }
-            }
+        let Some(idx) = tok.rfind(':') else { continue };
+        let Ok(port) = tok[idx + 1..].trim_end_matches(']').parse::<u16>() else {
+            continue;
+        };
+        if tok.contains('.') || tok.contains('[') || tok.contains('*') {
+            return Some(port);
         }
     }
-    last
+    None
 }
 
 /// Pulls the owning PID out of the tail of a netstat/ss/lsof line.
@@ -504,6 +738,7 @@ fn extract_pid(line: &str) -> Option<u32> {
 
 /// Locates the manifest for a plugin id under `<app_data>/plugins/<id>/`.
 fn manifest_path_for(app_handle: &AppHandle, plugin_id: &str) -> Result<PathBuf, String> {
+    paths::validate_plugin_id(plugin_id)?;
     let base = config::config_dir(app_handle)?;
     Ok(base.join("plugins").join(plugin_id).join("manifest.json"))
 }
@@ -531,6 +766,19 @@ fn lifecycle_step<'m>(
         .ok_or_else(|| format!("plugin '{}' has no '{step}' lifecycle step", manifest.id))
 }
 
+/// Human-readable transient status for a lifecycle step: "starting",
+/// "installing", "building", … (previously `format!("{step}-ing")` produced
+/// "start-ing", which the frontend's status union didn't recognize).
+fn transient_status(step_name: &str) -> String {
+    match step_name {
+        "start" => "starting".to_string(),
+        "install" => "installing".to_string(),
+        "build" => "building".to_string(),
+        "stop" => "stopping".to_string(),
+        other => format!("{other}-ing"),
+    }
+}
+
 /// Shared logic for running any lifecycle step. Loads the instance + manifest,
 /// resolves the step (with runtime qualification), substitutes variables,
 /// spawns via `process::launch`, and sets the persisted status.
@@ -538,8 +786,13 @@ fn lifecycle_step<'m>(
 /// On spawn failure the persisted status is set to "error" before the error
 /// is returned, so the UI never sees a stale "starting" / "installing" state.
 fn run_step(app_handle: &AppHandle, id: &str, step_name: &str) -> Result<(), String> {
-    if process::is_running(app_handle, id) {
-        return Err(format!("instance '{id}' is already running"));
+    // Atomically reserve the start slot: closes the check-then-spawn race where
+    // two launches (rapid double-click, web remote + UI) both pass the
+    // is_running check and spawn into the same port. Released on every return.
+    let _reservation = process::reserve_start(app_handle, id)?;
+    // A manual start clears any accumulated crash-watchdog attempts.
+    if step_name == "start" {
+        crate::watchdog::reset(app_handle, id);
     }
 
     let cfg = config::load_config(app_handle)?;
@@ -581,7 +834,7 @@ fn run_step(app_handle: &AppHandle, id: &str, step_name: &str) -> Result<(), Str
             return Err("start_command is empty".to_string());
         }
 
-        let transient = format!("{step_name}-ing");
+        let transient = transient_status(step_name);
         set_status(app_handle, id, &transient)?;
 
         // Run the user's line through the OS shell verbatim so PATH lookups,
@@ -593,22 +846,13 @@ fn run_step(app_handle: &AppHandle, id: &str, step_name: &str) -> Result<(), Str
             std::path::Path::new(&instance.path),
             &line,
             None, // java_path
+            true, // restartable: this is the start step
         ) {
             set_status(app_handle, id, "error")?;
             return Err(e);
         }
         set_status(app_handle, id, "running")?;
-        // Persist the pid so a subsequent app restart can re-adopt the still-
-        // running process instead of leaving it invisible. Best-effort: a write
-        // failure here doesn't undo a successful launch.
-        if let Some(pid) = process::pid_for(app_handle, id) {
-            let _ = config::with_config_mut(app_handle, |cfg| {
-                if let Some(instance) = cfg.servers.get_mut(id) {
-                    instance.pid = Some(pid);
-                }
-                Ok(())
-            });
-        }
+        persist_process_identity(app_handle, id);
         return Ok(());
     }
 
@@ -706,7 +950,7 @@ fn run_step(app_handle: &AppHandle, id: &str, step_name: &str) -> Result<(), Str
             if resolved.trim().is_empty() {
                 return Err("custom start_command is empty".to_string());
             }
-            let transient = format!("{step_name}-ing");
+            let transient = transient_status(step_name);
             set_status(app_handle, id, &transient)?;
             let java_path = overrides.get("java_path").map(String::as_str);
             if let Err(e) = process::launch_via_shell(
@@ -715,11 +959,13 @@ fn run_step(app_handle: &AppHandle, id: &str, step_name: &str) -> Result<(), Str
                 std::path::Path::new(&instance.path),
                 &resolved,
                 java_path,
+                true, // restartable: this is the start step
             ) {
                 set_status(app_handle, id, "error")?;
                 return Err(e);
             }
             set_status(app_handle, id, "running")?;
+            persist_process_identity(app_handle, id);
             return Ok(());
         }
     }
@@ -783,6 +1029,7 @@ fn run_step(app_handle: &AppHandle, id: &str, step_name: &str) -> Result<(), Str
         &args,
         step.use_shell,
         java_path,
+        step_name == "start", // restartable: only the start step feeds the watchdog
     ) {
         // Spawn failed — roll back to error so the UI isn't stuck in a
         // transient state.
@@ -795,8 +1042,26 @@ fn run_step(app_handle: &AppHandle, id: &str, step_name: &str) -> Result<(), Str
     // receive an Exited event when they complete and can reconcile status.
     if step_name == "start" {
         set_status(app_handle, id, "running")?;
+        persist_process_identity(app_handle, id);
     }
     Ok(())
+}
+
+/// Persists the launched process's pid + OS start time so a later app restart
+/// can re-adopt it after identity verification (the start time guards against
+/// pid reuse). Best-effort: a write failure doesn't undo a successful launch.
+fn persist_process_identity(app_handle: &AppHandle, id: &str) {
+    let Some(pid) = process::pid_for(app_handle, id) else {
+        return;
+    };
+    let started = process::process_start_time(pid);
+    let _ = config::with_config_mut(app_handle, |cfg| {
+        if let Some(instance) = cfg.servers.get_mut(id) {
+            instance.pid = Some(pid);
+            instance.pid_started = started;
+        }
+        Ok(())
+    });
 }
 
 /// Resolves a `--bin <name>` for a `cargo run` / `cargo build` step when the
@@ -969,14 +1234,172 @@ fn detect_jar_for_launch(root: &std::path::Path, runtime: &str) -> Option<String
 /// output to `<instance.path>/latest.log` + a `log:<id>:stream` event.
 #[tauri::command]
 pub fn launch_server_instance(app_handle: AppHandle, id: String) -> Result<(), String> {
-    run_step(&app_handle, &id, "start")
+    run_step(&app_handle, &id, "start")?;
+    crate::audit::record(
+        &app_handle,
+        "start",
+        &format!("started '{}'", audit_name(&app_handle, &id)),
+        Some(&id),
+    );
+    Ok(())
 }
 
 /// Public entry point for launching an instance's "start" step from outside the
 /// command surface (used by the auto-start-on-launch path in `lib::setup`).
 /// Thin wrapper around the shared `run_step` helper.
 pub fn launch_instance(app_handle: &AppHandle, id: &str) -> Result<(), String> {
-    run_step(app_handle, id, "start")
+    run_step(app_handle, id, "start")?;
+    crate::audit::record(
+        app_handle,
+        "start",
+        &format!("started '{}'", audit_name(app_handle, id)),
+        Some(id),
+    );
+    Ok(())
+}
+
+/// Best-effort instance name for human-readable audit details.
+fn audit_name(app_handle: &AppHandle, id: &str) -> String {
+    config::load_config(app_handle)
+        .ok()
+        .and_then(|cfg| cfg.servers.get(id).map(|s| s.name.clone()))
+        .unwrap_or_else(|| id.to_string())
+}
+
+/// Read-only findings for the "import existing server folder" wizard.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderInspection {
+    pub path: String,
+    pub jars: Vec<String>,
+    pub start_scripts: Vec<String>,
+    pub has_server_properties: bool,
+    pub eula_declined: bool,
+    pub has_world: bool,
+    /// Runtime id understood by the minecraft plugin ("paper", "forge", …).
+    pub suggested_runtime: Option<String>,
+    /// Overrides to pre-fill for the chosen plugin.
+    pub suggested_overrides: std::collections::HashMap<String, String>,
+    /// Folder name, pre-filled as the instance name.
+    pub suggested_name: String,
+}
+
+/// Inspects a folder the user wants to adopt as an instance: which server jar
+/// or launch script it holds, whether a world exists, and whether the
+/// Minecraft EULA still needs accepting. Never writes anything.
+#[tauri::command]
+pub fn inspect_server_folder(path: String) -> Result<FolderInspection, String> {
+    let dir = std::path::Path::new(&path);
+    if !dir.exists() {
+        return Err(format!("'{path}' does not exist"));
+    }
+    if !dir.is_dir() {
+        return Err(format!("'{path}' is not a folder"));
+    }
+
+    let mut jars: Vec<String> = Vec::new();
+    let mut start_scripts: Vec<String> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if entry.path().is_dir() {
+                continue;
+            }
+            let lower = name.to_ascii_lowercase();
+            if lower.ends_with(".jar") {
+                if lower.ends_with("-installer.jar")
+                    || lower.ends_with("-libraries.jar")
+                    || lower.contains("installer")
+                {
+                    continue;
+                }
+                jars.push(name);
+            } else if matches!(
+                lower.as_str(),
+                "run.bat" | "run.sh" | "start.bat" | "start.sh" | "kern_start.bat" | "kern_start.sh"
+            ) {
+                start_scripts.push(name);
+            }
+        }
+    }
+    jars.sort();
+    start_scripts.sort();
+
+    let eula_declined = std::fs::read_to_string(dir.join("eula.txt"))
+        .map(|raw| eula_declined(&raw))
+        .unwrap_or(false);
+
+    let (suggested_runtime, server_jar) = detect_server_flavor(&jars, &start_scripts);
+    let mut suggested_overrides = std::collections::HashMap::new();
+    if let Some(runtime) = &suggested_runtime {
+        suggested_overrides.insert("runtime".to_string(), runtime.clone());
+    }
+    if let Some(jar) = server_jar {
+        suggested_overrides.insert("server_jar".to_string(), jar);
+    }
+    let suggested_name = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let has_server_properties = dir.join("server.properties").exists();
+    let has_world = dir.join("world").is_dir();
+
+    Ok(FolderInspection {
+        path,
+        jars,
+        start_scripts,
+        has_server_properties,
+        eula_declined,
+        has_world,
+        suggested_runtime,
+        suggested_overrides,
+        suggested_name,
+    })
+}
+
+/// Maps the files present in a folder to a plugin runtime + jar hint.
+/// Pure so it can be unit-tested.
+fn detect_server_flavor(
+    jars: &[String],
+    start_scripts: &[String],
+) -> (Option<String>, Option<String>) {
+    let find = |needle: &str| -> Option<String> {
+        jars.iter()
+            .find(|j| j.to_ascii_lowercase().contains(needle))
+            .cloned()
+    };
+
+    if let Some(jar) = find("fabric-server-launch") {
+        return (Some("fabric".to_string()), Some(jar));
+    }
+    if let Some(jar) = find("quilt-server-launcher") {
+        return (Some("quilt".to_string()), Some(jar));
+    }
+    if let Some(jar) = find("neoforge") {
+        return (Some("neoforge".to_string()), Some(jar));
+    }
+    if let Some(jar) = find("forge") {
+        return (Some("forge".to_string()), Some(jar));
+    }
+    if let Some(jar) = find("purpur") {
+        return (Some("purpur".to_string()), Some(jar));
+    }
+    if let Some(jar) = find("paper") {
+        return (Some("paper".to_string()), Some(jar));
+    }
+    if let Some(jar) = jars
+        .iter()
+        .find(|j| j.to_ascii_lowercase().contains("server"))
+        .cloned()
+    {
+        return (Some("vanilla".to_string()), Some(jar));
+    }
+    // Unknown/modded layouts: if there's a launch script, let Forge-style
+    // shell handling take over with no jar override.
+    if !start_scripts.is_empty() {
+        return (None, None);
+    }
+    (None, jars.first().cloned())
 }
 
 /// Runs an arbitrary lifecycle step (install, build, test, etc.) from the
@@ -1006,33 +1429,45 @@ pub fn install_server_instance(app_handle: AppHandle, id: String) -> Result<(), 
 /// again via the "start" lifecycle step.
 ///
 /// If the instance isn't running, returns an error rather than silently
-/// starting — callers should check `is_server_running` first.
+/// starting — callers should check `is_server_running` first. Runs on a
+/// blocking thread so the graceful-stop wait never freezes the UI.
 #[tauri::command]
-pub fn restart_server_instance(app_handle: AppHandle, id: String) -> Result<(), String> {
-    if !process::is_running(&app_handle, &id) {
+pub async fn restart_server_instance(app_handle: AppHandle, id: String) -> Result<(), String> {
+    let handle = app_handle.clone();
+    tauri::async_runtime::spawn_blocking(move || restart_instance_blocking(&handle, &id))
+        .await
+        .map_err(|e| format!("restart task failed: {e}"))?
+}
+
+/// Blocking restart (also used by the scheduler): stop, brief settle, then
+/// start with a few retries for slow port release.
+pub fn restart_instance_blocking(app_handle: &AppHandle, id: &str) -> Result<(), String> {
+    if !process::is_running(app_handle, id) && !process::is_task_running(app_handle, id) {
         return Err(format!("instance '{id}' is not running"));
     }
 
-    set_status(&app_handle, &id, "stopping")?;
+    stop_instance_blocking(app_handle, id)?;
 
-    // Graceful: let the server save its world before we tear it down. Falls back
-    // to a hard kill if it doesn't exit within the timeout, so a restart can
-    // never hang. The subsequent pause + relaunch then start clean.
-    process::stop_graceful(&app_handle, &id, GRACEFUL_STOP_TIMEOUT)?;
-
-    // Brief pause lets the OS release resources before re-spawning.
+    // Brief pause lets the OS release the port/socket before re-spawning.
     std::thread::sleep(std::time::Duration::from_millis(300));
 
     // Retry the re-spawn a few times: on a slow host the OS may not have
-    // finished releasing the port/socket yet, and a single attempt can fail
-    // spuriously even though nothing is actually wrong. Surfacing the error
-    // only after several tries avoids confusing "restart failed" errors.
+    // finished releasing resources yet, and a single attempt can fail
+    // spuriously even though nothing is actually wrong.
     const RESTART_MAX_ATTEMPTS: u32 = 3;
     const RESTART_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
     let mut last_err: Option<String> = None;
     for _ in 0..RESTART_MAX_ATTEMPTS {
-        match run_step(&app_handle, &id, "start") {
-            Ok(_) => return Ok(()),
+        match run_step(app_handle, id, "start") {
+            Ok(_) => {
+                crate::audit::record(
+                    app_handle,
+                    "restart",
+                    &format!("restarted '{}'", audit_name(app_handle, id)),
+                    Some(id),
+                );
+                return Ok(());
+            }
             Err(e) => {
                 last_err = Some(e);
                 std::thread::sleep(RESTART_RETRY_DELAY);
@@ -1042,34 +1477,168 @@ pub fn restart_server_instance(app_handle: AppHandle, id: String) -> Result<(), 
     Err(last_err.unwrap_or_else(|| "restart failed for unknown reason".to_string()))
 }
 
-/// Stops a running instance. Idempotent — Ok if it wasn't running.
+/// Resolved graceful-stop behaviour for an instance.
+struct StopStrategy {
+    /// Text sent to the server's stdin (`None` = skip; e.g. servers without a
+    /// console).
+    stdin_command: Option<String>,
+    /// Optional manifest `stop` lifecycle step to run before signalling.
+    manifest_step: Option<manifest::LifecycleStep>,
+}
+
+/// Picks the graceful-stop behaviour for an instance:
+///   1. instance `stop_command` override (empty string disables stdin),
+///   2. manifest `stopCommand`,
+///   3. when the manifest declares a `stop` lifecycle step, that step only,
+///   4. otherwise the Minecraft-style default `"stop"`.
+fn resolve_stop_strategy(
+    app_handle: &AppHandle,
+    instance: &ServerInstance,
+) -> Result<StopStrategy, String> {
+    let non_empty = |s: String| -> Option<String> {
+        let t = s.trim();
+        (!t.is_empty()).then(|| t.to_string())
+    };
+
+    if instance.server_type == "custom" {
+        let cmd = instance
+            .stop_command
+            .clone()
+            .unwrap_or_else(|| "stop".to_string());
+        return Ok(StopStrategy {
+            stdin_command: non_empty(process::resolve_variables(
+                &cmd,
+                &instance.user_overrides,
+            )),
+            manifest_step: None,
+        });
+    }
+
+    let manifest = manifest::load(&manifest_path_for(app_handle, &instance.server_type)?)?;
+    let runtime = instance.user_overrides.get("runtime").map(String::as_str);
+    let step = lifecycle_step(&manifest, "stop", runtime).ok().cloned();
+
+    let stdin_command = match &instance.stop_command {
+        Some(s) => non_empty(process::resolve_variables(s, &instance.user_overrides)),
+        None => match manifest.stop_command.as_deref() {
+            Some(s) => non_empty(process::resolve_variables(s, &instance.user_overrides)),
+            None if step.is_some() => None,
+            None => Some("stop".to_string()),
+        },
+    };
+
+    Ok(StopStrategy {
+        stdin_command,
+        manifest_step: step,
+    })
+}
+
+/// Blocking stop shared by the stop command, restart, delete, and web remote.
 ///
-/// Asks the server to shut down gracefully first (e.g. Minecraft's `stop`
-/// command flushes chunks and saves the world), and only hard-kills if it
-/// hasn't exited within [`GRACEFUL_STOP_TIMEOUT`]. This avoids rollbacks to the
-/// last autosave that a raw process kill would cause.
-#[tauri::command]
-pub fn stop_server_instance(app_handle: AppHandle, id: String) -> Result<(), String> {
-    // Re-adopted (PID-only) processes have no stdin pipe, so graceful shutdown
-    // is impossible — force-kill them directly. Owned processes get the normal
-    // graceful path (write `stop`, wait, hard-kill on timeout).
-    if process::is_adopted(&app_handle, &id) {
-        set_status(&app_handle, &id, "stopping")?;
-        process::force_kill_adopted(&app_handle, &id)?;
-        set_status(&app_handle, &id, "stopped")?;
-        // Clear the persisted pid so it isn't re-adopted next launch.
-        config::with_config_mut(&app_handle, |cfg| {
-            if let Some(instance) = cfg.servers.get_mut(&id) {
-                instance.pid = None;
-            }
-            Ok(())
-        })?;
+/// Handles three cases: an owned/adopted server process (staged graceful →
+/// forced tree-kill), a tracked one-shot task (hard cancel), or nothing
+/// running (idempotent no-op). Persists "stopped"/"stopped-forced" so the
+/// sidebar is correct even before the UI event arrives.
+pub fn stop_instance_blocking(app_handle: &AppHandle, id: &str) -> Result<(), String> {
+    stop_instance_internal(app_handle, id, true)?;
+    crate::audit::record(
+        app_handle,
+        "stop",
+        &format!("stopped '{}'", audit_name(app_handle, id)),
+        Some(id),
+    );
+    Ok(())
+}
+
+/// Stop implementation with an opt-out for post-stop hooks. `delete_server`
+/// passes `run_hooks = false` so deleting an instance doesn't archive a world
+/// into the directory it's about to remove.
+fn stop_instance_internal(
+    app_handle: &AppHandle,
+    id: &str,
+    run_hooks: bool,
+) -> Result<(), String> {
+    let cfg = config::load_config(app_handle)?;
+    let instance = cfg
+        .servers
+        .get(id)
+        .cloned()
+        .ok_or_else(|| format!("server '{id}' not found"))?;
+
+    // One Stop covers both a server and a running install/ad-hoc task.
+    if !process::is_running(app_handle, id) {
+        if process::is_task_running(app_handle, id) {
+            set_status(app_handle, id, "stopping")?;
+            process::stop_task(app_handle, id)?;
+            set_status(app_handle, id, "stopped")?;
+        }
         return Ok(());
     }
-    set_status(&app_handle, &id, "stopping")?;
-    process::stop_graceful(&app_handle, &id, GRACEFUL_STOP_TIMEOUT)?;
-    set_status(&app_handle, &id, "stopped")?;
+
+    set_status(app_handle, id, "stopping")?;
+
+    let strategy = resolve_stop_strategy(app_handle, &instance)?;
+    let timeout = std::time::Duration::from_secs(instance.stop_timeout_secs.max(1));
+
+    // Manifest stop step (e.g. an RCON/helper command) runs first, bounded.
+    if let Some(step) = &strategy.manifest_step {
+        let helper_timeout = timeout.min(std::time::Duration::from_secs(15));
+        if let Err(e) = process::run_stop_step(
+            app_handle,
+            id,
+            std::path::Path::new(&instance.path),
+            step,
+            helper_timeout,
+        ) {
+            let _ = app_handle.emit(
+                &format!("log:{id}:stream"),
+                format!("{} [stop] stop step failed: {e}", timestamp()),
+            );
+        }
+    }
+
+    let outcome =
+        process::stop_managed(app_handle, id, timeout, strategy.stdin_command.as_deref())?;
+    let final_status = match outcome {
+        process::StopOutcome::Graceful => "stopped",
+        process::StopOutcome::Forced => "stopped-forced",
+    };
+    set_status(app_handle, id, final_status)?;
+
+    // The instance is down — honor the scheduled "snapshot when stopped" hook.
+    if run_hooks && instance.backup_schedule.on_stop {
+        match backup_world_impl(app_handle, id) {
+            Ok(relative) => crate::watchdog::notify(
+                app_handle,
+                "success",
+                "On-stop backup saved",
+                Some(relative),
+                Some(id),
+            ),
+            Err(e) => crate::watchdog::notify(
+                app_handle,
+                "error",
+                "On-stop backup failed",
+                Some(e),
+                Some(id),
+            ),
+        }
+    }
     Ok(())
+}
+
+/// Stops a running instance. Idempotent — Ok if it wasn't running.
+///
+/// Asks the server to shut down gracefully first (per-instance `stop_command`
+/// or plugin `stop` step), then force-kills the whole process tree if it
+/// doesn't exit within the instance's `stop_timeout_secs`. Runs on a blocking
+/// thread so the wait never freezes the UI.
+#[tauri::command]
+pub async fn stop_server_instance(app_handle: AppHandle, id: String) -> Result<(), String> {
+    let handle = app_handle.clone();
+    tauri::async_runtime::spawn_blocking(move || stop_instance_blocking(&handle, &id))
+        .await
+        .map_err(|e| format!("stop task failed: {e}"))?
 }
 
 /// Runs an arbitrary command inside an instance's working directory and waits
@@ -1084,14 +1653,27 @@ pub fn stop_server_instance(app_handle: AppHandle, id: String) -> Result<(), Str
 /// The process inherits the instance's `.env` environment variables. On
 /// failure the persisted status is set to "error" before the error is returned.
 #[tauri::command]
-pub fn run_instance_command(
+pub async fn run_instance_command(
+    app_handle: AppHandle,
+    id: String,
+    command: String,
+    args: Vec<String>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        run_instance_command_blocking(app_handle, id, command, args)
+    })
+    .await
+    .map_err(|e| format!("command task failed: {e}"))?
+}
+
+fn run_instance_command_blocking(
     app_handle: AppHandle,
     id: String,
     command: String,
     args: Vec<String>,
 ) -> Result<(), String> {
     use std::io::{BufRead, BufReader};
-    use std::process::{Command as StdCommand, Stdio};
+    use std::process::Stdio;
     use tauri::Emitter;
 
     // 1. Load instance config.
@@ -1112,7 +1694,7 @@ pub fn run_instance_command(
     let log_path = working_dir.join("latest.log");
 
     // 2. Build the command.
-    let mut cmd = StdCommand::new(&command);
+    let mut cmd = process::silent_command(&command);
     cmd.current_dir(working_dir);
     cmd.args(&args);
     // Inherit host env and layer the instance's .env on top.
@@ -1123,7 +1705,6 @@ pub fn run_instance_command(
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
-    process::suppress_window(&mut cmd);
 
     // 3. Set transient status.
     set_status(&app_handle, &id, "setup")?;
@@ -1132,6 +1713,16 @@ pub fn run_instance_command(
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("failed to spawn '{command}': {e}"))?;
+
+    // Track the child so the Stop control can cancel a hung installer.
+    let task = match process::register_task(&app_handle, &id, child.id()) {
+        Ok(task) => task,
+        Err(e) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(e);
+        }
+    };
 
     let stdout = child
         .stdout
@@ -1151,7 +1742,7 @@ pub fn run_instance_command(
     let event_out = event_name.clone();
     let stdout_thread = std::thread::spawn(move || {
         let reader = BufReader::new(stdout);
-        for line in reader.lines().flatten() {
+        for line in reader.lines().map_while(Result::ok) {
             let stamped = forward_to_log(&handle, &event_out, &log_path_stdout, &line);
             let _ = handle.emit(&event_out, stamped);
         }
@@ -1162,7 +1753,7 @@ pub fn run_instance_command(
     let event_err = event_name.clone();
     let stderr_thread = std::thread::spawn(move || {
         let reader = BufReader::new(stderr);
-        for line in reader.lines().flatten() {
+        for line in reader.lines().map_while(Result::ok) {
             let stamped = forward_to_log(&handle_err, &event_err, &log_path_stderr, &line);
             let _ = handle_err.emit(&event_err, stamped);
         }
@@ -1175,6 +1766,13 @@ pub fn run_instance_command(
     let status = child
         .wait()
         .map_err(|e| format!("failed to wait for child: {e}"))?;
+    process::unregister_task(&app_handle, &id);
+
+    // A cancel via the Stop control is not a failure exit.
+    if task.was_forced() {
+        set_status(&app_handle, &id, "stopped")?;
+        return Ok(());
+    }
 
     // 7. Report result.
     if status.success() {
@@ -1202,7 +1800,17 @@ pub fn run_instance_command(
 /// `ls`, pipes, and redirects all resolve — typing into the terminal behaves
 /// the way a user expects. The shell runs scoped to the instance directory.
 #[tauri::command]
-pub fn run_terminal_command(
+pub async fn run_terminal_command(
+    app_handle: AppHandle,
+    id: String,
+    line: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || run_terminal_command_blocking(app_handle, id, line))
+        .await
+        .map_err(|e| format!("command task failed: {e}"))?
+}
+
+fn run_terminal_command_blocking(
     app_handle: AppHandle,
     id: String,
     line: String,
@@ -1238,12 +1846,21 @@ pub fn run_terminal_command(
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
-    process::suppress_window(&mut cmd);
 
     // 3. Spawn.
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("failed to spawn '{line}': {e}"))?;
+
+    // Track the child so the Stop control can cancel a hung ad-hoc command.
+    let task = match process::register_task(&app_handle, &id, child.id()) {
+        Ok(task) => task,
+        Err(e) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(e);
+        }
+    };
 
     let stdout = child
         .stdout
@@ -1262,7 +1879,7 @@ pub fn run_terminal_command(
     let event_out = event_name.clone();
     let stdout_thread = std::thread::spawn(move || {
         let reader = BufReader::new(stdout);
-        for line in reader.lines().flatten() {
+        for line in reader.lines().map_while(Result::ok) {
             let stamped = forward_to_log(&handle, &event_out, &log_path_stdout, &line);
             let _ = handle.emit(&event_out, stamped);
         }
@@ -1273,7 +1890,7 @@ pub fn run_terminal_command(
     let event_err = event_name.clone();
     let stderr_thread = std::thread::spawn(move || {
         let reader = BufReader::new(stderr);
-        for line in reader.lines().flatten() {
+        for line in reader.lines().map_while(Result::ok) {
             let stamped = forward_to_log(&handle_err, &event_err, &log_path_stderr, &line);
             let _ = handle_err.emit(&event_err, stamped);
         }
@@ -1287,8 +1904,9 @@ pub fn run_terminal_command(
     let status = child
         .wait()
         .map_err(|e| format!("failed to wait for child: {e}"))?;
+    process::unregister_task(&app_handle, &id);
 
-    if status.success() {
+    if task.was_forced() || status.success() {
         Ok(())
     } else {
         let code = status.code().map_or("unknown".to_string(), |c| c.to_string());
@@ -1347,17 +1965,16 @@ fn has_timestamp(line: &str) -> bool {
     if i < len && bytes[i].is_ascii_digit() {
         i += 1;
     }
-    if i >= len || bytes[i] != b':' || digits(&bytes, &mut i, 2).is_break() {
+    if i >= len || bytes[i] != b':' || digits(bytes, &mut i, 2).is_break() {
         return false;
     }
-    if i < len && bytes[i] == b':' {
-        if digits(&bytes, &mut i, 2).is_break() {
+    if i < len && bytes[i] == b':'
+        && digits(bytes, &mut i, 2).is_break() {
             return false;
         }
-    }
     if i < len && bytes[i] == b'.' {
         i += 1;
-        if digits(&bytes, &mut i, 1).is_break() {
+        if digits(bytes, &mut i, 1).is_break() {
             return false;
         }
         while i < len && bytes[i].is_ascii_digit() {
@@ -1445,7 +2062,17 @@ pub fn write_stdin_to_instance(
 /// lines. A multi-GB `latest.log` no longer gets slurped into a single String.
 /// The first line of a truncated tail is likely partial and is dropped.
 #[tauri::command]
-pub fn get_log_tail(
+pub async fn get_log_tail(
+    app_handle: AppHandle,
+    id: String,
+    max_lines: Option<usize>,
+) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || get_log_tail_blocking(app_handle, id, max_lines))
+        .await
+        .map_err(|e| format!("log tail task failed: {e}"))?
+}
+
+fn get_log_tail_blocking(
     app_handle: AppHandle,
     id: String,
     max_lines: Option<usize>,
@@ -1551,7 +2178,7 @@ pub fn server_file_exists(app_handle: AppHandle, id: String, rel_path: String) -
         .servers
         .get(&id)
         .ok_or_else(|| format!("server '{id}' not found"))?;
-    let target = std::path::Path::new(&instance.path).join(&rel_path);
+    let target = resolve_path(&instance.path, &rel_path)?;
     Ok(target.exists())
 }
 
@@ -1603,6 +2230,15 @@ pub fn write_server_file(
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("failed to create parent dirs: {e}"))?;
     }
+    // Auto-snapshot the previous content when the instance enables snapshots.
+    if instance
+        .features
+        .get("snapshots")
+        .copied()
+        .unwrap_or(false)
+    {
+        let _ = crate::snapshots::capture(std::path::Path::new(&instance.path), &rel_path);
+    }
     std::fs::write(&target, &content)
         .map_err(|e| format!("failed to write '{rel_path}': {e}"))?;
 
@@ -1628,34 +2264,10 @@ pub struct FileEntry {
 
 /// Security: resolve a relative path against the instance root and reject
 /// paths that escape the instance directory (path traversal prevention).
+/// Delegates to [`crate::paths::safe_join`], the single containment primitive
+/// (lexical `..` rejection, symlink-aware, works for not-yet-existing files).
 fn resolve_path(instance_root: &str, rel_path: &str) -> Result<std::path::PathBuf, String> {
-    let root = std::path::Path::new(instance_root);
-    // Normalize the relative path — strip leading `/` or `\`, reject absolute.
-    let clean = rel_path
-        .trim_start_matches('/')
-        .trim_start_matches('\\');
-    if std::path::Path::new(clean).is_absolute() {
-        return Err("absolute paths are not allowed".to_string());
-    }
-    let joined = root.join(clean);
-    // Canonicalize the root to resolve any `..` traversal, then ensure the
-    // resolved target is still under the root.
-    let canonical_root = root
-        .canonicalize()
-        .map_err(|e| format!("cannot resolve instance path: {e}"))?;
-    let target = if joined.exists() {
-        joined
-            .canonicalize()
-            .map_err(|e| format!("cannot resolve target path: {e}"))?
-    } else {
-        // For non-existent paths, resolve parent and check the joined path
-        // is still under root by comparing components.
-        joined
-    };
-    if !target.starts_with(&canonical_root) {
-        return Err("path traversal detected".to_string());
-    }
-    Ok(target)
+    paths::safe_join(std::path::Path::new(instance_root), rel_path)
 }
 
 /// A file's content paired with its on-disk mtime (epoch seconds).
@@ -1910,13 +2522,19 @@ pub fn get_plugin(
 /// mounting (ArchitecturePlan §4, PluginWrapper).
 #[tauri::command]
 pub fn get_plugin_ui_path(app_handle: AppHandle, id: String) -> Result<Option<String>, String> {
+    paths::validate_plugin_id(&id)?;
     let base = config::config_dir(&app_handle)?;
     let plugins_dir = manifest::plugins_dir(&base);
     let plugin_dir = plugins_dir.join(&id);
     let manifest = manifest::load_by_id(&plugins_dir, &id)?;
     match manifest.ui_entry {
         Some(entry) if !entry.is_empty() => {
-            Ok(Some(plugin_dir.join(entry).to_string_lossy().to_string()))
+            // The UI bundle path comes from the manifest and must stay inside
+            // the plugin directory — `uiEntry: "../../evil.js"` would
+            // otherwise be import()ed by the host webview.
+            let ui_path = paths::safe_join(&plugin_dir, &entry)
+                .map_err(|e| format!("plugin '{id}' has an unsafe uiEntry '{entry}': {e}"))?;
+            Ok(Some(ui_path.to_string_lossy().to_string()))
         }
         _ => Ok(None),
     }
@@ -1951,6 +2569,7 @@ pub fn install_plugin(
         ));
     }
     let manifest = manifest::load(&manifest_path)?;
+    manifest::validate_installable(&manifest)?;
 
     // Check for id collision.
     let base = config::config_dir(&app_handle)?;
@@ -1972,6 +2591,12 @@ pub fn install_plugin(
         format!("failed to copy plugin directory: {e}")
     })?;
 
+    crate::audit::record(
+        &app_handle,
+        "plugin-install",
+        &format!("installed plugin '{}' v{}", manifest.id, manifest.version),
+        None,
+    );
     Ok(manifest)
 }
 
@@ -1984,7 +2609,13 @@ fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::
             let entry = entry?;
             let from = entry.path();
             let to = dst.join(entry.file_name());
-            if entry.file_type()?.is_dir() {
+            let file_type = entry.file_type()?;
+            // Never follow symlinks: a plugin source directory could otherwise
+            // pull arbitrary files (SSH keys, browser data) into the plugin.
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
                 copy_dir_recursive(&from, &to)?;
             } else {
                 std::fs::copy(&from, &to)?;
@@ -2003,6 +2634,10 @@ fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::
 /// a fresh install (used by .kern package upgrades).
 #[tauri::command]
 pub fn uninstall_plugin(app_handle: AppHandle, id: String) -> Result<(), String> {
+    // The id becomes a directory name — reject traversal before any FS access
+    // (a malicious plugin could otherwise invoke `uninstall_plugin` with
+    // `id: ".."` and recursively delete `<app_data>`).
+    paths::validate_plugin_id(&id)?;
     let base = config::config_dir(&app_handle)?;
     let plugins_dir = manifest::plugins_dir(&base);
     let target = plugins_dir.join(&id);
@@ -2028,7 +2663,16 @@ pub fn uninstall_plugin(app_handle: AppHandle, id: String) -> Result<(), String>
     }
 
     std::fs::remove_dir_all(&target)
-        .map_err(|e| format!("failed to remove plugin '{id}': {e}"))
+        .map_err(|e| format!("failed to remove plugin '{id}': {e}"))?;
+    // Drop the plugin's private key-value store too.
+    crate::plugin_kv::clear_plugin_data(&app_handle, &id);
+    crate::audit::record(
+        &app_handle,
+        "plugin-uninstall",
+        &format!("uninstalled plugin '{id}'"),
+        None,
+    );
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -2102,32 +2746,51 @@ pub fn install_plugin_from_kern(
         return Err("plugin package does not contain a manifest.json".to_string());
     }
     let manifest = manifest::load(&manifest_path)?;
+    manifest::validate_installable(&manifest)?;
 
     let base = config::config_dir(&app_handle)?;
     let plugins_target = manifest::plugins_dir(&base);
     let target = plugins_target.join(&manifest.id);
 
     // Check for existing plugin - upgrade if force is true
+    if target.exists() && !force {
+        return Err(format!(
+            "plugin '{}' is already installed — uninstall it first or use force=true to upgrade",
+            manifest.id
+        ));
+    }
+
+    // Stage the new copy next to the plugins dir (same volume, not scanned by
+    // `discover`), then swap it in. Unlike a remove-then-copy this cannot leave
+    // the user without a working plugin if the copy fails half-way.
+    let staging = base.join(format!(".kern-staging-{}", manifest.id));
+    let backup = base.join(format!(".kern-backup-{}", manifest.id));
+    let _ = std::fs::remove_dir_all(&staging);
+    if let Err(e) = copy_dir_recursive(temp_dir.path(), &staging) {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(format!("failed to stage plugin directory: {e}"));
+    }
+
     if target.exists() {
-        if !force {
+        let _ = std::fs::remove_dir_all(&backup);
+        if let Err(e) = std::fs::rename(&target, &backup) {
+            let _ = std::fs::remove_dir_all(&staging);
             return Err(format!(
-                "plugin '{}' is already installed — uninstall it first or use force=true to upgrade",
+                "failed to move existing plugin '{}' aside: {e}",
                 manifest.id
             ));
         }
-        // Remove existing plugin for upgrade
-        std::fs::remove_dir_all(&target)
-            .map_err(|e| format!("failed to remove existing plugin '{}': {e}", manifest.id))?;
     }
 
-    // Copy extracted plugin to plugins directory
-    std::fs::create_dir_all(&target)
-        .map_err(|e| format!("failed to create plugin directory: {e}"))?;
-
-    copy_dir_recursive(temp_dir.path(), &target).map_err(|e| {
-        let _ = std::fs::remove_dir_all(&target);
-        format!("failed to copy plugin directory: {e}")
-    })?;
+    if let Err(e) = std::fs::rename(&staging, &target) {
+        // Roll the previous version back so the plugin never disappears.
+        if backup.exists() {
+            let _ = std::fs::rename(&backup, &target);
+        }
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(format!("failed to install plugin '{}': {e}", manifest.id));
+    }
+    let _ = std::fs::remove_dir_all(&backup);
 
     Ok(manifest)
 }
@@ -2220,27 +2883,9 @@ fn add_dir_to_zip(
     Ok(())
 }
 
-/// Joins a zip entry's name onto `dst` only if the name is safe (no `..` or
-/// absolute components that would escape `dst`). Returns `None` for unsafe
-/// names — this is the zip-slip traversal guard.
-///
-/// `enclosed_name()` already does the heavy lifting: it normalizes the entry
-/// path and returns `None` when it would escape the base. We additionally
-/// double-check the canonicalized result stays under `dst` after joining, as
-/// defense in depth (symlinks, case-insensitive roots, etc.).
-fn safe_zip_join(dst: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
-    // Reject obvious traversal attempts up front (enclosed_name handles the
-    // subtle cases, but being explicit makes the intent clear).
-    let joined = dst.join(name);
-    let canonical_dst = dst.canonicalize().unwrap_or_else(|_| dst.to_path_buf());
-    // If the joined path doesn't yet exist, compare against the parent.
-    let canonical_joined = joined.canonicalize().unwrap_or_else(|_| joined.clone());
-    if canonical_joined.starts_with(&canonical_dst) {
-        Some(joined)
-    } else {
-        None
-    }
-}
+/// Maximum uncompressed size of a single .kern archive entry (64 MiB).
+/// Plugin bundles are small; a larger entry is either a mistake or a zip bomb.
+const MAX_KERN_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Extracts a .kern (zip) archive to the specified destination.
 fn extract_kern_archive(archive_path: &std::path::Path, dst: &std::path::Path) -> Result<(), String> {
@@ -2252,7 +2897,7 @@ fn extract_kern_archive(archive_path: &std::path::Path, dst: &std::path::Path) -
         .map_err(|e| format!("invalid .kern archive: {e}"))?;
 
     for i in 0..archive.len() {
-        let mut file = archive.by_index(i)
+        let mut entry = archive.by_index(i)
             .map_err(|e| format!("failed to read archive entry: {e}"))?;
 
         // Zip-slip guard: enclosed_name() returns None for paths that would
@@ -2260,36 +2905,51 @@ fn extract_kern_archive(archive_path: &std::path::Path, dst: &std::path::Path) -
         // could otherwise write anywhere on disk — and .kern files are
         // installable via double-click/deep-link, so this is reachable by an
         // attacker. Reject such entries outright.
-        let Some(safe_name) = file.enclosed_name() else {
+        let Some(safe_name) = entry.enclosed_name() else {
             return Err(format!(
                 "archive entry '{}' is unsafe (path traversal) — refusing to extract",
-                file.name()
+                entry.name()
             ));
         };
+        // Defense in depth: the lexical normaliser must also accept the name.
+        paths::normalize_relative(&entry.name().replace('\\', "/")).map_err(|_| {
+            format!(
+                "archive entry '{}' is unsafe (path traversal) — refusing to extract",
+                entry.name()
+            )
+        })?;
         let outpath = dst.join(safe_name);
-        // Defense in depth: re-check the resolved path stays under dst.
-        if safe_zip_join(dst, file.name()).is_none() {
-            return Err(format!(
-                "archive entry '{}' resolves outside the destination — refusing to extract",
-                file.name()
-            ));
-        }
 
-        if file.is_dir() {
+        if entry.is_dir() {
             std::fs::create_dir_all(&outpath)
                 .map_err(|e| format!("failed to create directory: {e}"))?;
         } else {
+            if entry.size() > MAX_KERN_ENTRY_BYTES {
+                return Err(format!(
+                    "archive entry '{}' is too large ({} bytes) — refusing to extract",
+                    entry.name(),
+                    entry.size()
+                ));
+            }
             if let Some(parent) = outpath.parent() {
                 std::fs::create_dir_all(parent)
                     .map_err(|e| format!("failed to create parent dir: {e}"))?;
             }
             let mut outfile = std::fs::File::create(&outpath)
                 .map_err(|e| format!("failed to create file: {e}"))?;
-            let mut content = Vec::new();
-            file.read_to_end(&mut content)
-                .map_err(|e| format!("failed to read archive: {e}"))?;
-            outfile.write_all(&content)
-                .map_err(|e| format!("failed to write file: {e}"))?;
+            let written = std::io::copy(
+                &mut entry.by_ref().take(MAX_KERN_ENTRY_BYTES + 1),
+                &mut outfile,
+            )
+            .map_err(|e| format!("failed to write file: {e}"))?;
+            if written > MAX_KERN_ENTRY_BYTES {
+                drop(outfile);
+                let _ = std::fs::remove_file(&outpath);
+                return Err(format!(
+                    "archive entry '{}' exceeded the size limit — refusing to extract",
+                    entry.name()
+                ));
+            }
         }
     }
     Ok(())
@@ -2304,8 +2964,22 @@ fn extract_kern_archive(archive_path: &std::path::Path, dst: &std::path::Path) -
 /// path. The world is backed up live — no server stop required — but the user
 /// should ideally run `save-all` first to flush chunk data to disk.
 #[tauri::command]
-pub fn backup_world(app_handle: AppHandle, id: String) -> Result<String, String> {
-    backup_world_impl(&app_handle, &id)
+pub async fn backup_world(app_handle: AppHandle, id: String) -> Result<String, String> {
+    let handle = app_handle.clone();
+    let id_owned = id.clone();
+    let archive = tauri::async_runtime::spawn_blocking(move || backup_world_impl(&handle, &id_owned))
+        .await
+        .map_err(|e| format!("backup task failed: {e}"))??;
+    crate::audit::record(
+        &app_handle,
+        "backup",
+        &format!(
+            "backed up '{}' → {archive}",
+            audit_name(&app_handle, &id)
+        ),
+        Some(&id),
+    );
+    Ok(archive)
 }
 
 /// Implementation usable from non-command contexts (the scheduler thread).
@@ -2331,6 +3005,21 @@ pub fn backup_world_impl(app_handle: &AppHandle, id: &str) -> Result<String, Str
     let backups_dir = root.join("backups");
     std::fs::create_dir_all(&backups_dir)
         .map_err(|e| format!("failed to create backups dir: {e}"))?;
+
+    // Disk-space guard: refuse a backup that clearly can't fit rather than
+    // producing a truncated archive on a full disk. The world is measured
+    // uncompressed (zip will usually be smaller) plus a safety margin.
+    let world_bytes = crate::disk::dir_size_bytes(&world_dir);
+    const BACKUP_HEADROOM_BYTES: u64 = 100 * 1024 * 1024;
+    if let Some(free) = crate::disk::available_space_for(&backups_dir) {
+        if free < world_bytes.saturating_add(BACKUP_HEADROOM_BYTES) {
+            return Err(format!(
+                "not enough free disk space for the backup: world is ~{} MB and only {} MB is free",
+                world_bytes / (1024 * 1024),
+                free / (1024 * 1024)
+            ));
+        }
+    }
 
     // Timestamped archive name: world-2026-06-30T14-30-00.zip
     let timestamp = SystemTime::now()
@@ -2449,7 +3138,28 @@ pub fn prune_backups_impl(app_handle: &AppHandle, id: &str, keep: u32) {
 /// Restores a world from a backup archive. Backs up the current world first
 /// (safety copy), then replaces `world/` contents with the archive's contents.
 #[tauri::command]
-pub fn restore_world(
+pub async fn restore_world(
+    app_handle: AppHandle,
+    id: String,
+    backup_name: String,
+) -> Result<(), String> {
+    let handle = app_handle.clone();
+    let id_owned = id.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        restore_world_blocking(handle, id_owned, backup_name)
+    })
+    .await
+    .map_err(|e| format!("restore task failed: {e}"))??;
+    crate::audit::record(
+        &app_handle,
+        "restore",
+        &format!("restored world for '{}'", audit_name(&app_handle, &id)),
+        Some(&id),
+    );
+    Ok(())
+}
+
+fn restore_world_blocking(
     app_handle: AppHandle,
     id: String,
     backup_name: String,
@@ -2462,7 +3172,10 @@ pub fn restore_world(
 
     let root = PathBuf::from(&instance.path);
     let backups_dir = root.join("backups");
-    let archive_path = backups_dir.join(&backup_name);
+    // `backup_name` is user-supplied — it must be a bare file name, otherwise
+    // `join` would happily take `../../anything` or an absolute path.
+    let backup_file = paths::safe_file_name(&backup_name)?;
+    let archive_path = backups_dir.join(backup_file);
 
     if !archive_path.exists() {
         return Err(format!("backup '{}' not found", backup_name));
@@ -2531,27 +3244,44 @@ pub fn restore_world(
                 file.name()
             ));
         };
-        let outpath = world_dir.join(safe_name);
-        if safe_zip_join(&world_dir, file.name()).is_none() {
-            return Err(format!(
-                "backup entry '{}' resolves outside world/ — refusing to restore",
+        paths::normalize_relative(&file.name().replace('\\', "/")).map_err(|_| {
+            format!(
+                "backup entry '{}' is unsafe (path traversal) — refusing to restore",
                 file.name()
-            ));
-        }
+            )
+        })?;
+        let outpath = world_dir.join(safe_name);
 
         if file.is_dir() {
             std::fs::create_dir_all(&outpath)
                 .map_err(|e| format!("mkdir error: {e}"))?;
         } else {
+            if file.size() > MAX_KERN_ENTRY_BYTES {
+                return Err(format!(
+                    "backup entry '{}' is too large ({} bytes) — refusing to restore",
+                    file.name(),
+                    file.size()
+                ));
+            }
             if let Some(parent) = outpath.parent() {
                 std::fs::create_dir_all(parent)
                     .map_err(|e| format!("mkdir error: {e}"))?;
             }
             let mut outfile = std::fs::File::create(&outpath)
                 .map_err(|e| format!("create file error: {e}"))?;
-            let mut content = Vec::new();
-            file.read_to_end(&mut content).map_err(|e| format!("read error: {e}"))?;
-            outfile.write_all(&content).map_err(|e| format!("write error: {e}"))?;
+            let written = std::io::copy(
+                &mut file.by_ref().take(MAX_KERN_ENTRY_BYTES + 1),
+                &mut outfile,
+            )
+            .map_err(|e| format!("write error: {e}"))?;
+            if written > MAX_KERN_ENTRY_BYTES {
+                drop(outfile);
+                let _ = std::fs::remove_file(&outpath);
+                return Err(format!(
+                    "backup entry '{}' exceeded the size limit — refusing to restore",
+                    file.name()
+                ));
+            }
         }
     }
 
@@ -2571,9 +3301,10 @@ pub fn delete_backup(
         .get(&id)
         .ok_or_else(|| format!("server '{id}' not found"))?;
 
+    let backup_file = paths::safe_file_name(&backup_name)?;
     let archive_path = PathBuf::from(&instance.path)
         .join("backups")
-        .join(&backup_name);
+        .join(backup_file);
 
     if !archive_path.exists() {
         return Err(format!("backup '{}' not found", backup_name));
@@ -2598,6 +3329,35 @@ pub fn update_backup_schedule(
     config::with_config_mut(&app_handle, |cfg| {
         if let Some(instance) = cfg.servers.get_mut(&id) {
             instance.backup_schedule = schedule;
+        }
+        Ok(())
+    })
+}
+
+/// Updates an instance's scheduled tasks, preserving host-managed last-run
+/// stamps for tasks that kept their id.
+#[tauri::command]
+pub fn update_server_tasks(
+    app_handle: AppHandle,
+    id: String,
+    tasks: Vec<config::ScheduledTask>,
+) -> Result<(), String> {
+    config::with_config_mut(&app_handle, |cfg| {
+        if let Some(instance) = cfg.servers.get_mut(&id) {
+            let last_runs: HashMap<String, u64> = instance
+                .tasks
+                .iter()
+                .map(|t| (t.id.clone(), t.last_run_secs))
+                .collect();
+            instance.tasks = tasks
+                .into_iter()
+                .map(|mut t| {
+                    if let Some(prev) = last_runs.get(&t.id) {
+                        t.last_run_secs = *prev;
+                    }
+                    t
+                })
+                .collect();
         }
         Ok(())
     })
@@ -2870,7 +3630,7 @@ fn glob_match(path: &str, pattern: &str) -> bool {
     let parts: Vec<&str> = pattern.split('*').collect();
     if parts.len() == 1 {
         // No wildcard, do exact match
-        return path.contains(&parts[0]);
+        return path.contains(parts[0]);
     }
     // Check if all parts exist in order
     let mut pos = 0;
@@ -2894,7 +3654,22 @@ pub struct SearchMatch {
 }
 
 #[tauri::command]
-pub fn search_files(
+pub async fn search_files(
+    app_handle: AppHandle,
+    id: String,
+    query: String,
+    mode: String,
+    include: Option<String>,
+    exclude: Option<String>,
+) -> Result<Vec<SearchMatch>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        search_files_blocking(app_handle, id, query, mode, include, exclude)
+    })
+    .await
+    .map_err(|e| format!("search task failed: {e}"))?
+}
+
+fn search_files_blocking(
     app_handle: AppHandle,
     id: String,
     query: String,
@@ -2935,13 +3710,11 @@ pub fn search_files(
         let path_lower = rel_path.to_lowercase();
         if !glob_match(&path_lower, include_pattern) { continue; }
         if exclude_patterns.iter().any(|p| glob_match(&path_lower, p)) { continue; }
-        if mode == "filenames" || mode == "both" {
-            if path_lower.contains(&query_lower) {
-                if !results.iter().any(|r| r.rel_path == rel_path) {
+        if (mode == "filenames" || mode == "both")
+            && path_lower.contains(&query_lower)
+                && !results.iter().any(|r| r.rel_path == rel_path) {
                     results.push(SearchMatch { rel_path: rel_path.clone(), line_number: None, line_preview: None });
                 }
-            }
-        }
         if mode == "contents" || mode == "both" {
             // Skip oversized files — reading a multi-GB log into a String would
             // stall the command pool and risk OOM.
@@ -2987,7 +3760,22 @@ pub struct ReplaceResult {
 /// so a giant file can't stall it. Returns the count of files changed and
 /// total replacements. Case-sensitive.
 #[tauri::command]
-pub fn find_replace_in_files(
+pub async fn find_replace_in_files(
+    app_handle: AppHandle,
+    id: String,
+    query: String,
+    replacement: String,
+    include: Option<String>,
+    exclude: Option<String>,
+) -> Result<ReplaceResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        find_replace_in_files_blocking(app_handle, id, query, replacement, include, exclude)
+    })
+    .await
+    .map_err(|e| format!("replace task failed: {e}"))?
+}
+
+fn find_replace_in_files_blocking(
     app_handle: AppHandle,
     id: String,
     query: String,
@@ -3069,7 +3857,8 @@ pub fn get_file_from_backup(
 ) -> Result<Option<String>, String> {
     let cfg = config::load_config(&app_handle)?;
     let instance = cfg.servers.get(&id).ok_or_else(|| format!("server '{}' not found", id))?;
-    let backup_path = std::path::PathBuf::from(&instance.path).join("backups").join(&backup_name);
+    let backup_file = paths::safe_file_name(&backup_name)?;
+    let backup_path = std::path::PathBuf::from(&instance.path).join("backups").join(backup_file);
     if !backup_path.exists() { return Err(format!("backup '{}' not found", backup_name)); }
     let file = std::fs::File::open(&backup_path).map_err(|e| format!("failed to open backup: {}", e))?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("invalid backup archive: {}", e))?;
@@ -3089,7 +3878,13 @@ pub fn get_file_from_backup(
 }
 
 #[tauri::command]
-pub fn read_file_bytes(app_handle: AppHandle, id: String, rel_path: String) -> Result<String, String> {
+pub async fn read_file_bytes(app_handle: AppHandle, id: String, rel_path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || read_file_bytes_blocking(app_handle, id, rel_path))
+        .await
+        .map_err(|e| format!("read task failed: {e}"))?
+}
+
+fn read_file_bytes_blocking(app_handle: AppHandle, id: String, rel_path: String) -> Result<String, String> {
     let cfg = config::load_config(&app_handle)?;
     let instance = cfg.servers.get(&id).ok_or_else(|| format!("server '{}' not found", id))?;
     let target = resolve_path(&instance.path, &rel_path)?;
@@ -3100,7 +3895,7 @@ pub fn read_file_bytes(app_handle: AppHandle, id: String, rel_path: String) -> R
 
 fn base64_encode(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut result = String::with_capacity((bytes.len() + 2) / 3 * 4);
+    let mut result = String::with_capacity(bytes.len().div_ceil(3) * 4);
     let mut i = 0;
     while i < bytes.len() {
         let b0 = bytes[i] as usize;
@@ -3126,4 +3921,94 @@ fn base64_encode(bytes: &[u8]) -> String {
         i += 3;
     }
     result
+}
+
+#[cfg(test)]
+mod listening_socket_tests {
+    use super::{extract_pid, extract_port, parse_listening};
+
+    #[test]
+    fn parses_windows_netstat_local_port_not_foreign() {
+        // Regression: the foreign address column used to win, reporting port 0.
+        let line = "  tcp        0.0.0.0:25565          0.0.0.0:0              listening       1234";
+        assert_eq!(extract_port(line), Some(25565));
+        assert_eq!(extract_pid(line), Some(1234));
+    }
+
+    #[test]
+    fn parses_ss_style_line() {
+        let line = "listen 0 4096 0.0.0.0:25565 0.0.0.0:* users:((\"java\",pid=1234,fd=70))";
+        assert_eq!(extract_port(line), Some(25565));
+        assert_eq!(extract_pid(line), Some(1234));
+    }
+
+    #[test]
+    fn parses_lsof_style_line() {
+        let line = "java 1234 user 123u ipv6 0x1234 0t0 tcp *:25565 (listen)";
+        assert_eq!(extract_port(line), Some(25565));
+        assert_eq!(extract_pid(line), Some(1234));
+    }
+
+    #[test]
+    fn parses_ipv6_local_address() {
+        let line = "tcp [::]:7440 [::]:0 listening 42";
+        assert_eq!(extract_port(line), Some(7440));
+    }
+
+    #[test]
+    fn ignores_non_listening_rows() {
+        let rows = parse_listening("tcp 0.0.0.0:25565 0.0.0.0:0 established 1");
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn port_conflicts_ignore_the_instances_own_tree() {
+        use super::find_port_conflicts;
+        use std::collections::HashSet;
+
+        let listening = vec![(100, 25565u16), (200, 8080u16), (300, 25575u16)];
+        let own: HashSet<u32> = [100].into_iter().collect();
+        let conflicts = find_port_conflicts(&[25565, 8080, 25575, 9999], &listening, &own);
+        // 25565 is ours (pid 100) → not a conflict; 8080 held by 200 → conflict;
+        // 25575 held by 300 → conflict; 9999 not listening → ignored.
+        assert_eq!(conflicts, vec![(8080, 200), (25575, 300)]);
+    }
+
+    #[test]
+    fn eula_detection_is_case_insensitive() {
+        use super::eula_declined;
+        assert!(eula_declined("eula=false\n"));
+        assert!(eula_declined("# comment\nEULA = FALSE\n"));
+        assert!(!eula_declined("eula=true\n"));
+        assert!(!eula_declined(""));
+    }
+
+    #[test]
+    fn server_flavor_detection_prefers_specific_runtimes() {
+        use super::detect_server_flavor;
+
+        let jars = |names: &[&str]| names.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+
+        let (runtime, jar) =
+            detect_server_flavor(&jars(&["server.jar"]), &[]);
+        assert_eq!(runtime.as_deref(), Some("vanilla"));
+        assert_eq!(jar.as_deref(), Some("server.jar"));
+
+        let (runtime, _) = detect_server_flavor(
+            &jars(&["server.jar", "fabric-server-launch.jar"]),
+            &[],
+        );
+        assert_eq!(runtime.as_deref(), Some("fabric"));
+
+        let (runtime, _) = detect_server_flavor(
+            &jars(&["paper-1.21.jar"]),
+            &[],
+        );
+        assert_eq!(runtime.as_deref(), Some("paper"));
+
+        // A launch script with no recognizable jar → no runtime/jar override.
+        let (runtime, jar) = detect_server_flavor(&[], &["run.bat".to_string()]);
+        assert_eq!(runtime, None);
+        assert_eq!(jar, None);
+    }
 }

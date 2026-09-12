@@ -1,0 +1,577 @@
+/* kern setup — frameless installer styled like the app shell.
+ *
+ * Layout: custom titlebar (brand · live status · controls · matrix lane),
+ * scrollable content, footer actions, and a slow scanline while installing.
+ * All motion is disabled under prefers-reduced-motion.
+ */
+
+:root {
+  --bg: #050506;
+  --surface: #0b0c10;
+  --grid: #161920;
+  --signal: #4cf5a0;
+  --warn: #f5a04c;
+  --fault: #f54c4c;
+  --dim: #4c525e;
+  --text: #e4e4e7;
+  --titlebar-h: 36px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow: hidden;
+  user-select: none;
+}
+
+.frame {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  border: 1px solid var(--grid);
+  background: var(--bg);
+}
+
+/* ── Titlebar ───────────────────────────────────────────────────────── */
+
+.titlebar {
+  position: relative;
+  height: var(--titlebar-h);
+  flex: 0 0 var(--titlebar-h);
+  display: flex;
+  align-items: center;
+  background: var(--surface);
+  border-bottom: 1px solid var(--grid);
+}
+
+.brand {
+  position: absolute;
+  left: 10px;
+  top: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.brand-icon {
+  position: relative;
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+}
+
+.brand-icon img {
+  width: 16px;
+  height: 16px;
+  image-rendering: auto;
+}
+
+.signal-dot {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--dim);
+  box-shadow: 0 0 0 1.5px var(--surface);
+  transition: background 0.3s, box-shadow 0.3s;
+}
+
+body.is-working .signal-dot {
+  background: var(--warn);
+  box-shadow: 0 0 0 1.5px var(--surface), 0 0 6px var(--warn);
+  animation: dot-pulse 1.1s ease-in-out infinite;
+}
+
+body.is-done .signal-dot {
+  background: var(--signal);
+  box-shadow: 0 0 0 1.5px var(--surface), 0 0 6px var(--signal);
+}
+
+body.is-error .signal-dot {
+  background: var(--fault);
+  box-shadow: 0 0 0 1.5px var(--surface), 0 0 6px var(--fault);
+}
+
+.wordmark {
+  font-size: 11px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: #d4d4d8;
+}
+
+.tag {
+  font-size: 10px;
+  color: var(--dim);
+}
+
+.status {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--dim);
+  transition: color 0.3s;
+  white-space: nowrap;
+}
+
+body.is-working .status {
+  color: var(--warn);
+}
+
+body.is-done .status {
+  color: var(--signal);
+}
+
+body.is-error .status {
+  color: var(--fault);
+}
+
+/* Error glitch: a brief chromatic shiver on the status text. */
+body.glitching .status {
+  animation: glitch 0.7s steps(2, end) 1;
+}
+
+.controls {
+  position: absolute;
+  right: 0;
+  top: 0;
+  height: 100%;
+  display: flex;
+}
+
+.controls button {
+  width: 42px;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  color: #a1a1aa;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.15s, color 0.15s;
+}
+
+.controls button:hover {
+  background: var(--grid);
+  color: #f4f4f5;
+}
+
+.controls button.close:hover {
+  background: var(--fault);
+  color: var(--bg);
+}
+
+.glyph-min {
+  display: block;
+  width: 10px;
+  border-top: 1px solid currentColor;
+}
+
+.glyph-close {
+  font-size: 15px;
+  line-height: 1;
+  margin-top: -2px;
+}
+
+/* ── Matrix lane: signal-trail progress ─────────────────────────────── */
+
+.lane {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 3px;
+  background-color: var(--grid);
+  /* Dot ticks give the lane a matrix-readout feel. */
+  background-image: radial-gradient(rgba(76, 245, 160, 0.12) 0.5px, transparent 0.6px);
+  background-size: 4px 3px;
+  overflow: hidden;
+}
+
+.lane-fill {
+  position: relative;
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(
+    90deg,
+    rgba(76, 245, 160, 0.18),
+    rgba(76, 245, 160, 0.55)
+  );
+  transition: width 0.45s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.lane-fill::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  top: -1px;
+  width: 3px;
+  height: 5px;
+  background: var(--signal);
+  box-shadow: 0 0 7px var(--signal), 0 0 14px rgba(76, 245, 160, 0.6);
+}
+
+body.is-working .lane-fill::after {
+  animation: trail-breathe 1.2s ease-in-out infinite;
+}
+
+body.is-done .lane-fill {
+  background: linear-gradient(90deg, rgba(76, 245, 160, 0.5), var(--signal));
+}
+
+body.is-error .lane-fill {
+  background: linear-gradient(90deg, rgba(245, 76, 76, 0.25), var(--fault));
+}
+
+body.is-error .lane-fill::after {
+  background: var(--fault);
+  box-shadow: 0 0 7px var(--fault);
+}
+
+/* ── Content ────────────────────────────────────────────────────────── */
+
+main {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px;
+}
+
+.lead {
+  color: #a1a1aa;
+  margin: 0 0 10px;
+}
+
+.note {
+  margin: 0 0 18px;
+  font-size: 11px;
+  color: var(--dim);
+}
+
+.field {
+  display: block;
+  margin-bottom: 14px;
+}
+
+.field > span {
+  display: block;
+  font-size: 11px;
+  color: var(--dim);
+  margin-bottom: 5px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.field input[type="text"] {
+  width: 100%;
+  background: #000;
+  border: 1px solid var(--grid);
+  color: var(--text);
+  padding: 8px 10px;
+  font: inherit;
+  outline: none;
+}
+
+.field input[type="text"]:focus {
+  border-color: var(--signal);
+  box-shadow: 0 0 0 1px rgba(76, 245, 160, 0.25);
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0;
+  color: #c9cdd6;
+  cursor: pointer;
+}
+
+.check input {
+  accent-color: var(--signal);
+}
+
+.warn {
+  margin-top: 16px;
+  padding: 8px 10px;
+  border: 1px solid rgba(245, 76, 76, 0.4);
+  background: rgba(245, 76, 76, 0.06);
+  color: var(--fault);
+  font-size: 11px;
+}
+
+/* ── Steps + current action ─────────────────────────────────────────── */
+
+#steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+#steps li {
+  display: flex;
+  gap: 10px;
+  padding: 7px 2px;
+  font-size: 12px;
+  color: #a1a1aa;
+  border-bottom: 1px solid var(--grid);
+}
+
+#steps li:last-child {
+  border-bottom: 0;
+}
+
+#steps li .mark {
+  width: 14px;
+  flex: 0 0 14px;
+  color: var(--dim);
+}
+
+#steps li.active {
+  color: #e4e4e7;
+}
+
+#steps li.active .mark {
+  color: var(--warn);
+  animation: blink 1s steps(2, end) infinite;
+}
+
+#steps li.done .mark {
+  color: var(--signal);
+}
+
+#steps li.failed,
+#steps li.failed .mark {
+  color: var(--fault);
+}
+
+/* One slim, grayed line showing the *actual* current action. */
+.current-action {
+  display: flex;
+  gap: 6px;
+  margin: 12px 2px 0;
+  font-size: 10.5px;
+  color: #52525b;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.current-action .caret {
+  color: #3f3f46;
+  flex: 0 0 auto;
+}
+
+#currentActionText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  animation: action-in 0.25s ease-out;
+}
+
+/* ── Result ─────────────────────────────────────────────────────────── */
+
+#resultText {
+  margin: 6px 2px;
+  color: #c9cdd6;
+  white-space: pre-wrap;
+}
+
+#resultText.error {
+  color: var(--fault);
+}
+
+.countdown {
+  margin: 4px 2px;
+  font-size: 11px;
+  color: var(--signal);
+  letter-spacing: 0.08em;
+}
+
+/* ── Footer ─────────────────────────────────────────────────────────── */
+
+footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--grid);
+  background: var(--surface);
+}
+
+button {
+  font: 600 12px ui-monospace, monospace;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 8px 16px;
+  cursor: pointer;
+  border: 1px solid var(--grid);
+  background: transparent;
+  color: #d4d4d8;
+  transition: border-color 0.15s, color 0.15s, opacity 0.15s, box-shadow 0.15s;
+}
+
+button:hover {
+  border-color: var(--dim);
+}
+
+button.primary {
+  background: var(--signal);
+  border-color: var(--signal);
+  color: var(--bg);
+}
+
+button.primary:hover {
+  opacity: 0.85;
+  box-shadow: 0 0 10px rgba(76, 245, 160, 0.35);
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+/* ── Scanline sweep (working state only) ────────────────────────────── */
+
+.scanline {
+  position: absolute;
+  left: 1px;
+  right: 1px;
+  top: var(--titlebar-h);
+  height: 60px;
+  pointer-events: none;
+  opacity: 0;
+  background: linear-gradient(
+    180deg,
+    transparent,
+    rgba(76, 245, 160, 0.055),
+    transparent
+  );
+  transition: opacity 0.4s;
+}
+
+body.is-working .scanline {
+  opacity: 1;
+  animation: sweep 3.4s linear infinite;
+}
+
+/* ── Passive mode (updater / /P) ────────────────────────────────────── */
+
+body.passive #intro,
+body.passive footer {
+  display: none;
+}
+
+body.passive #progress {
+  display: block !important;
+}
+
+/* ── Keyframes ──────────────────────────────────────────────────────── */
+
+@keyframes dot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.35;
+    transform: scale(0.8);
+  }
+}
+
+@keyframes trail-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@keyframes blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
+@keyframes sweep {
+  from {
+    transform: translateY(-60px);
+  }
+  to {
+    transform: translateY(100vh);
+  }
+}
+
+@keyframes glitch {
+  0% {
+    transform: translate(-50%, -50%);
+    text-shadow: 1px 0 var(--fault), -1px 0 #4cd8f5;
+  }
+  25% {
+    transform: translate(calc(-50% + 2px), -50%);
+    text-shadow: -2px 0 var(--fault), 2px 0 #4cd8f5;
+  }
+  50% {
+    transform: translate(calc(-50% - 2px), -50%);
+    text-shadow: 2px 0 var(--fault), -1px 0 #4cd8f5;
+  }
+  75% {
+    transform: translate(-50%, -50%);
+    text-shadow: -1px 0 var(--fault), 1px 0 #4cd8f5;
+  }
+  100% {
+    transform: translate(-50%, -50%);
+    text-shadow: none;
+  }
+}
+
+@keyframes action-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ── Accessibility ──────────────────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+  .scanline {
+    display: none;
+  }
+}

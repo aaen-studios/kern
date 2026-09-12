@@ -18,12 +18,14 @@
 //! termination marker (so a fast restart emits exactly one).
 
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -31,18 +33,40 @@ use tauri::{AppHandle, Emitter, Manager};
 /// `state` rather than parsing a free-form string.
 ///
 /// Serializes internally-tagged so it matches the frontend's discriminated-union
-/// contract exactly: `Running` → `{ "state": "running" }` and
-/// `Exited { code }` → `{ "state": "exited", "code": <n|null> }`. Without
-/// `tag = "state"` serde uses the default externally-tagged form, which emits a
-/// bare `"running"` string — and the UI's `payload.state === "running"` check
-/// then never matches, so live status updates silently never fire.
+/// contract: `Running` → `{ "state": "running" }`, `Stopping` →
+/// `{ "state": "stopping" }`, and `Exited { code, forced }` →
+/// `{ "state": "exited", "code": <n|null>, "forced": <bool> }`.
 #[derive(Clone, serde::Serialize)]
 #[serde(tag = "state", rename_all = "camelCase")]
 pub enum StatusPayload {
     /// Process spawned and now streaming output.
     Running,
-    /// Process terminated, optionally with an exit code.
-    Exited { code: Option<i32> },
+    /// A stop was requested; the graceful phase is in progress.
+    Stopping,
+    /// Process terminated. `forced` is true when the graceful window expired
+    /// and the tree had to be killed (the UI shows "stopped (forced)").
+    Exited { code: Option<i32>, forced: bool },
+}
+
+/// Handle to a Windows Job Object grouping a child's whole process tree.
+/// Dropping it closes the handle (the processes keep running, matching kern's
+/// "servers outlive the app" policy); explicit tree termination goes through
+/// `TerminateJobObject`.
+#[cfg(windows)]
+struct JobHandle(isize);
+
+#[cfg(windows)]
+unsafe impl Send for JobHandle {}
+#[cfg(windows)]
+unsafe impl Sync for JobHandle {}
+
+#[cfg(windows)]
+impl Drop for JobHandle {
+    fn drop(&mut self) {
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(self.0 as _);
+        }
+    }
 }
 
 /// One entry per running instance: the child (for kill + exit code), a writer
@@ -64,6 +88,15 @@ struct RunningProcess {
     /// OS process id, captured at spawn so the metrics sampler can resolve the
     /// process tree without locking the `Child` handle.
     pid: u32,
+    /// Set by the stop path right before a forced kill, so the teardown can
+    /// report `Exited { forced: true }` instead of a generic error exit.
+    forced: Arc<AtomicBool>,
+    /// Set when the user (or a delete/restart) asked for the stop, so the
+    /// crash watchdog doesn't treat it as an unexpected exit.
+    intentional: Arc<AtomicBool>,
+    /// Windows Job Object covering the whole tree (None if assignment failed).
+    #[cfg(windows)]
+    job: Option<JobHandle>,
     #[allow(dead_code)]
     working_dir: PathBuf,
 }
@@ -82,6 +115,157 @@ pub struct ProcessRegistry {
     /// monitors (liveness, metrics, tray, force-kill). A server is "running"
     /// if it's in `processes` (owned) OR `adopted`.
     adopted: Mutex<HashMap<String, u32>>,
+    /// Ids with a launch in flight. An `Arc` so `StartReservation` can hold a
+    /// clone without borrowing the Tauri `State`.
+    starting: Arc<Mutex<std::collections::HashSet<String>>>,
+    /// One-shot children (installers, ad-hoc terminal commands) that the Stop
+    /// control can cancel. Tracked by pid only: the calling command owns the
+    /// `Child` and blocks on it.
+    tasks: Mutex<HashMap<String, TaskEntry>>,
+}
+
+/// A tracked one-shot child.
+struct TaskEntry {
+    pid: u32,
+    /// Set by `stop_task` so the owning command can report a cancel rather
+    /// than a failure exit code.
+    forced: Arc<AtomicBool>,
+}
+
+/// Handle returned by [`register_task`]; lets the owning command tell whether
+/// the task was canceled while it was waiting.
+pub struct TaskRegistration {
+    forced: Arc<AtomicBool>,
+}
+
+impl TaskRegistration {
+    /// True when the task was force-killed by a stop request.
+    pub fn was_forced(&self) -> bool {
+        self.forced.load(Ordering::SeqCst)
+    }
+}
+
+/// Clears its id from the registry's `starting` set on drop, so every early
+/// return from a launch path releases the reservation automatically.
+pub struct StartReservation {
+    starting: Arc<Mutex<std::collections::HashSet<String>>>,
+    id: String,
+}
+
+impl Drop for StartReservation {
+    fn drop(&mut self) {
+        if let Ok(mut set) = self.starting.lock() {
+            set.remove(&self.id);
+        }
+    }
+}
+
+/// Atomically reserves a start slot for `id`. Fails if the instance is already
+/// running/adopted or another start is in flight — closing the check-then-spawn
+/// race that let two launches share one port.
+pub fn reserve_start(app_handle: &AppHandle, id: &str) -> Result<StartReservation, String> {
+    let registry: tauri::State<'_, ProcessRegistry> = app_handle.state();
+    let starting = registry.starting.clone();
+    let mut set = starting
+        .lock()
+        .map_err(|e| format!("start reservation lock poisoned: {e}"))?;
+    if set.contains(id) {
+        return Err(format!("instance '{id}' is already starting"));
+    }
+    let owned = registry
+        .processes
+        .lock()
+        .map_err(|e| format!("process registry lock poisoned: {e}"))?
+        .contains_key(id);
+    let adopted = registry
+        .adopted
+        .lock()
+        .map_err(|e| format!("adopted registry lock poisoned: {e}"))?
+        .contains_key(id);
+    if owned || adopted {
+        return Err(format!("instance '{id}' is already running"));
+    }
+    set.insert(id.to_string());
+    drop(set);
+    Ok(StartReservation {
+        starting,
+        id: id.to_string(),
+    })
+}
+
+/// Registers a one-shot child (installer / ad-hoc command) so the Stop control
+/// can cancel it. Fails if a task is already tracked for the id.
+pub fn register_task(app_handle: &AppHandle, id: &str, pid: u32) -> Result<TaskRegistration, String> {
+    let registry: tauri::State<'_, ProcessRegistry> = app_handle.state();
+    let mut tasks = registry
+        .tasks
+        .lock()
+        .map_err(|e| format!("task registry lock poisoned: {e}"))?;
+    if let Some(existing) = tasks.get(id) {
+        if pid_alive(existing.pid) {
+            return Err(format!("a task is already running for '{id}'"));
+        }
+        // Stale entry (owning command died before unregistering) — replace it.
+        tasks.remove(id);
+    }
+    let forced = Arc::new(AtomicBool::new(false));
+    tasks.insert(
+        id.to_string(),
+        TaskEntry {
+            pid,
+            forced: forced.clone(),
+        },
+    );
+    Ok(TaskRegistration { forced })
+}
+
+/// Removes a task from the registry (called by the owning command on exit).
+pub fn unregister_task(app_handle: &AppHandle, id: &str) {
+    let registry: tauri::State<'_, ProcessRegistry> = app_handle.state();
+    let _ = registry.tasks.lock().map(|mut tasks| tasks.remove(id));
+}
+
+/// True while a one-shot task is tracked for this instance.
+pub fn is_task_running(app_handle: &AppHandle, id: &str) -> bool {
+    let registry: tauri::State<'_, ProcessRegistry> = app_handle.state();
+    registry
+        .tasks
+        .lock()
+        .map(|t| t.contains_key(id))
+        .unwrap_or(true)
+}
+
+/// Cancels a tracked task: force-kills the tree and confirms death. Returns
+/// `Ok(true)` when a task was running and is now gone.
+pub fn stop_task(app_handle: &AppHandle, id: &str) -> Result<bool, String> {
+    let registry: tauri::State<'_, ProcessRegistry> = app_handle.state();
+    let entry = {
+        let mut tasks = registry
+            .tasks
+            .lock()
+            .map_err(|e| format!("task registry lock poisoned: {e}"))?;
+        tasks.remove(id)
+    };
+    let Some(entry) = entry else {
+        return Ok(false);
+    };
+    entry.forced.store(true, Ordering::SeqCst);
+
+    #[cfg(windows)]
+    let _ = terminate_tree(entry.pid, &None);
+    #[cfg(unix)]
+    let _ = terminate_tree(entry.pid, &());
+
+    for _ in 0..25 {
+        if !pid_alive(entry.pid) {
+            return Ok(true);
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    Err(format!(
+        "task for '{id}' (pid {}) survived the force-kill",
+        entry.pid
+    ))
 }
 
 impl ProcessRegistry {
@@ -233,21 +417,20 @@ fn has_timestamp(line: &str) -> bool {
     if i < len && bytes[i].is_ascii_digit() {
         i += 1;
     }
-    if i >= len || bytes[i] != b':' || digits(&bytes, &mut i, 2).is_break() {
+    if i >= len || bytes[i] != b':' || digits(bytes, &mut i, 2).is_break() {
         return false;
     }
 
     // Optional ':SS' (seconds).
-    if i < len && bytes[i] == b':' {
-        if digits(&bytes, &mut i, 2).is_break() {
+    if i < len && bytes[i] == b':'
+        && digits(bytes, &mut i, 2).is_break() {
             return false;
         }
-    }
 
     // Optional sub-second fraction ('.' then 1+ digits).
     if i < len && bytes[i] == b'.' {
         i += 1;
-        if digits(&bytes, &mut i, 1).is_break() {
+        if digits(bytes, &mut i, 1).is_break() {
             return false;
         }
         while i < len && bytes[i].is_ascii_digit() {
@@ -272,9 +455,16 @@ fn has_timestamp(line: &str) -> bool {
     true
 }
 
+/// Epoch seconds, for run-duration math.
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 /// Formats the current wall-clock time as `[HH:MM:SS]` for log prefixes.
-fn timestamp() -> String {
-    let secs = SystemTime::now()
+fn timestamp() -> String {    let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
@@ -385,6 +575,181 @@ pub(crate) fn suppress_window(cmd: &mut Command) {
 #[cfg(not(windows))]
 pub(crate) fn suppress_window(_cmd: &mut Command) {}
 
+/// Creates a [`Command`] for `program` with the Windows console window already
+/// suppressed. This is the sanctioned constructor for every subprocess the app
+/// spawns: routing through it makes a console flash impossible to introduce by
+/// forgetting a `suppress_window` call. `scripts/check-silent-spawns.mjs`
+/// enforces this in CI.
+pub(crate) fn silent_command(program: impl AsRef<OsStr>) -> Command {
+    let mut cmd = Command::new(program); // silent-spawn-ok: constructor definition
+    suppress_window(&mut cmd);
+    cmd
+}
+
+/// Rewrites every shell-command segment that begins with `start` into
+/// `start /B`. `start` otherwise opens a brand-new console window even when the
+/// wrapping `cmd.exe` was spawned with `CREATE_NO_WINDOW`; `/B` starts the
+/// program in the current (hidden) console instead. Quote-aware (a `start`
+/// inside a quoted string is untouched and `^`-escapes are skipped), splitting
+/// on the unquoted cmd operators `&&`, `||`, `&`, and `|`.
+///
+/// Windows-only semantics, but compiled on every platform: the call sites are
+/// `if cfg!(windows)` runtime branches, so a `#[cfg(windows)]` here would break
+/// the Unix build (the branch body is still type-checked there).
+fn neutralize_start_commands(line: &str) -> String {
+    let mut out = String::with_capacity(line.len() + 8);
+    let mut in_quotes = false;
+    let mut segment_start = 0usize;
+    let bytes = line.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'"' => in_quotes = !in_quotes,
+            b'^' if !in_quotes => {
+                i += 2; // skip the escaped byte
+                continue;
+            }
+            b'&' | b'|' if !in_quotes => {
+                let mut j = i + 1;
+                if j < bytes.len() && bytes[j] == bytes[i] {
+                    j += 1;
+                }
+                push_start_segment(&mut out, &line[segment_start..i]);
+                out.push_str(&line[i..j]);
+                segment_start = j;
+                i = j;
+                continue;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    push_start_segment(&mut out, &line[segment_start..]);
+    out
+}
+
+/// Appends one shell segment to `out`, inserting `/B` when the first command
+/// position is the `start` builtin (leading whitespace and `(`-groups are
+/// treated as a prefix).
+fn push_start_segment(out: &mut String, segment: &str) {
+    let mut prefix_len = 0usize;
+    for (idx, ch) in segment.char_indices() {
+        if ch == '(' || ch == ' ' || ch == '\t' {
+            prefix_len = idx + ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    let rest = &segment[prefix_len..];
+    let is_start =
+        rest == "start" || rest.starts_with("start ") || rest.starts_with("start\t");
+    if is_start {
+        out.push_str(&segment[..prefix_len]);
+        out.push_str("start /B");
+        out.push_str(&rest["start".len()..]);
+    } else {
+        out.push_str(segment);
+    }
+}
+
+/// Platform handle covering a child's whole process tree.
+#[cfg(windows)]
+type TreeHandle = Option<JobHandle>;
+#[cfg(unix)]
+type TreeHandle = ();
+
+/// Puts the freshly spawned child into a process tree we can terminate as a
+/// unit. On Windows that's a Job Object; on Unix `spawn` already created a new
+/// process group (`process_group(0)`), so there's nothing extra to attach.
+#[cfg(windows)]
+fn attach_tree(child: &Child) -> TreeHandle {
+    create_job_for(child)
+}
+#[cfg(unix)]
+fn attach_tree(_child: &Child) -> TreeHandle {}
+
+/// Creates a Job Object covering `child`'s process tree. With the handle held
+/// for the process lifetime, `TerminateJobObject` is a guaranteed tree kill —
+/// `child.kill()` only terminates the direct child, which on Windows is often
+/// the `cmd.exe` wrapper rather than the real server (which then survives,
+/// holding its port).
+#[cfg(windows)]
+fn create_job_for(child: &Child) -> Option<JobHandle> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::System::JobObjects::{AssignProcessToJobObject, CreateJobObjectW};
+
+    unsafe {
+        let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+        if job.is_null() {
+            return None;
+        }
+        let handle = child.as_raw_handle() as HANDLE;
+        if AssignProcessToJobObject(job, handle) == 0 {
+            CloseHandle(job);
+            return None;
+        }
+        Some(JobHandle(job as isize))
+    }
+}
+
+/// Terminates the whole tree for a removed registry entry. Returns true when
+/// the tree-kill call was issued (death is still verified separately).
+#[cfg(windows)]
+fn terminate_tree(pid: u32, tree: &TreeHandle) -> bool {
+    use windows_sys::Win32::System::JobObjects::TerminateJobObject;
+    if let Some(job) = tree {
+        unsafe {
+            if TerminateJobObject(job.0 as _, 1) != 0 {
+                return true;
+            }
+        }
+    }
+    // Job assignment failed (or no job) — fall back to taskkill /T.
+    let mut cmd = silent_command("taskkill");
+    cmd.args(["/F", "/T", "/PID", &pid.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    cmd.status().map(|s| s.success()).unwrap_or(false)
+}
+
+#[cfg(unix)]
+fn terminate_tree(pid: u32, _tree: &TreeHandle) -> bool {
+    signal_group(pid, libc::SIGKILL)
+}
+
+/// Sends a signal to the child's process group (pgid == pid).
+#[cfg(unix)]
+fn signal_group(pid: u32, signal: libc::c_int) -> bool {
+    unsafe { libc::kill(-(pid as i32), signal) == 0 }
+}
+
+/// Graceful platform signal: SIGTERM to the group on Unix (Node/Python/JVM
+/// shutdown hooks run); Windows has no portable equivalent for windowless
+/// console children, so the stdin command is the only graceful channel there.
+#[cfg(unix)]
+fn graceful_signal(pid: u32) -> bool {
+    signal_group(pid, libc::SIGTERM)
+}
+#[cfg(windows)]
+fn graceful_signal(_pid: u32) -> bool {
+    false
+}
+
+/// The OS start time of a process (epoch seconds), used with the pid to verify
+/// identity across app restarts (pid reuse guard). `None` when not running.
+pub fn process_start_time(pid: u32) -> Option<u64> {
+    use sysinfo::{Pid, ProcessesToUpdate, System};
+    let mut sys = System::new();
+    sys.refresh_processes(ProcessesToUpdate::Some(&[Pid::from_u32(pid)]), true);
+    sys.process(Pid::from_u32(pid)).map(|p| p.start_time())
+}
+
+/// True while the pid is a live process.
+pub fn pid_alive(pid: u32) -> bool {
+    process_start_time(pid).is_some()
+}
+
 /// Builds a `Command` that runs a user-typed ad-hoc line through the OS shell.
 ///
 /// Unlike [`build_shell_command`] (which is for lifecycle launchers and rewrites
@@ -396,11 +761,11 @@ pub(crate) fn suppress_window(_cmd: &mut Command) {}
 /// Windows: `cmd.exe /C "<line>"`; on Unix: `sh -c "<line>"`.
 pub(crate) fn build_adhoc_shell_command(raw_line: &str) -> Command {
     if cfg!(windows) {
-        let mut c = Command::new("cmd.exe");
-        c.arg("/C").arg(raw_line);
+        let mut c = silent_command("cmd.exe");
+        c.arg("/C").arg(neutralize_start_commands(raw_line));
         c
     } else {
-        let mut c = Command::new("sh");
+        let mut c = silent_command("sh");
         c.arg("-c").arg(raw_line);
         c
     }
@@ -439,8 +804,8 @@ fn build_shell_command(command: &str, args: &[String]) -> Command {
             line.push(' ');
             line.push_str(a);
         }
-        let mut c = Command::new("cmd.exe");
-        c.arg("/C").arg(line);
+        let mut c = silent_command("cmd.exe");
+        c.arg("/C").arg(neutralize_start_commands(&line));
         c
     } else {
         // sh -c "<command> 'arg1' 'arg2' …" — single-quote each arg so a value
@@ -462,7 +827,7 @@ fn build_shell_command(command: &str, args: &[String]) -> Command {
             line.push_str(&safe);
             line.push('\'');
         }
-        let mut c = Command::new("sh");
+        let mut c = silent_command("sh");
         c.arg("-c").arg(line);
         c
     }
@@ -491,6 +856,7 @@ fn build_shell_command(command: &str, args: &[String]) -> Command {
 /// derivation that lets shell-based steps (Forge/NeoForge run scripts, which
 /// invoke `java` from PATH rather than our `command`) resolve the same JDK the
 /// user picked.
+#[allow(clippy::too_many_arguments)]
 pub fn launch(
     app_handle: &AppHandle,
     instance_id: &str,
@@ -499,6 +865,7 @@ pub fn launch(
     args: &[String],
     use_shell: bool,
     java_path: Option<&str>,
+    restartable: bool,
 ) -> Result<(), String> {
     // Build the command. When `use_shell` is true the command is invoked
     // through the OS shell so lifecycle steps naming a script (Forge/NeoForge's
@@ -507,7 +874,7 @@ pub fn launch(
     let cmd = if use_shell {
         build_shell_command(command, args)
     } else {
-        let mut c = Command::new(command);
+        let mut c = silent_command(command);
         c.args(args);
         c
     };
@@ -519,6 +886,7 @@ pub fn launch(
         format!("$ {} {}", command, shell_join(args)),
         command.to_string(),
         java_path,
+        restartable,
     )
 }
 
@@ -535,6 +903,7 @@ pub fn launch_via_shell(
     working_dir: &Path,
     raw_line: &str,
     java_path: Option<&str>,
+    restartable: bool,
 ) -> Result<(), String> {
     let cmd = build_adhoc_shell_command(raw_line);
     spawn_and_stream(
@@ -545,7 +914,131 @@ pub fn launch_via_shell(
         format!("$ {raw_line}"),
         raw_line.to_string(),
         java_path,
+        restartable,
     )
+}
+
+/// Runs a manifest `stop` lifecycle step (e.g. an RCON or helper command) in
+/// the instance directory, bounded by `timeout`, streaming its output to the
+/// terminal. The helper is deliberately NOT registered in the process table —
+/// it is a short-lived action accompanying the stop, not the server itself.
+pub fn run_stop_step(
+    app_handle: &AppHandle,
+    instance_id: &str,
+    working_dir: &Path,
+    step: &crate::manifest::LifecycleStep,
+    timeout: Duration,
+) -> Result<(), String> {
+    let cmd = if step.use_shell {
+        build_shell_command(&step.command, &step.args)
+    } else {
+        let mut c = silent_command(&step.command);
+        c.args(&step.args);
+        c
+    };
+    run_helper(app_handle, instance_id, working_dir, cmd, timeout)
+}
+
+/// Runs a raw shell line as an untracked, bounded helper (scheduled commands,
+/// ad-hoc maintenance) with output streamed to the terminal.
+pub fn run_shell_helper(
+    app_handle: &AppHandle,
+    instance_id: &str,
+    working_dir: &Path,
+    raw_line: &str,
+    timeout: Duration,
+) -> Result<(), String> {
+    let cmd = build_adhoc_shell_command(raw_line);
+    run_helper(app_handle, instance_id, working_dir, cmd, timeout)
+}
+
+/// Spawns a bounded helper command, forwarding stdout/stderr to the terminal,
+/// and force-kills it if it overruns `timeout`.
+fn run_helper(
+    app_handle: &AppHandle,
+    instance_id: &str,
+    working_dir: &Path,
+    mut cmd: Command,
+    timeout: Duration,
+) -> Result<(), String> {
+    cmd.current_dir(working_dir);
+    suppress_window(&mut cmd);
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("failed to spawn stop step: {e}"))?;
+    let pid = child.id();
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "stop step has no stdout pipe".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "stop step has no stderr pipe".to_string())?;
+
+    let event_name = format!("log:{instance_id}:stream");
+    let log_path = working_dir.join("latest.log");
+
+    let spawn_reader = |stream: Box<dyn std::io::Read + Send>, handle: AppHandle| {
+        let event = event_name.clone();
+        let log = log_path.clone();
+        std::thread::spawn(move || {
+            let reader = BufReader::new(stream);
+            for line in reader.lines().map_while(Result::ok) {
+                forward_plain(&handle, &event, &log, line.as_bytes());
+            }
+        })
+    };
+    let out_thread = spawn_reader(Box::new(stdout), app_handle.clone());
+    let err_thread = spawn_reader(Box::new(stderr), app_handle.clone());
+
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let _ = out_thread.join();
+                let _ = err_thread.join();
+                return if status.success() {
+                    Ok(())
+                } else {
+                    Err(format!("stop step exited with {:?}", status.code()))
+                };
+            }
+            Ok(None) => {}
+            Err(e) => {
+                return Err(format!("failed to poll stop step: {e}"));
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = out_thread.join();
+            let _ = err_thread.join();
+            return Err(format!("stop step timed out after {:?} (pid {pid})", timeout));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Forwards one line to the UI + disk without registry/generation guards
+/// (used by helper processes that aren't tracked in the process table).
+fn forward_plain(handle: &AppHandle, event_name: &str, log_path: &Path, bytes: &[u8]) {
+    let lossy = String::from_utf8_lossy(bytes);
+    let trimmed = lossy.trim_end_matches(['\r', '\n']);
+    if trimmed.is_empty() {
+        return;
+    }
+    append_log(log_path, trimmed.as_bytes());
+    let stamped = if has_timestamp(trimmed) {
+        trimmed.to_string()
+    } else {
+        format!("{} {}", timestamp(), trimmed)
+    };
+    let _ = handle.emit(event_name, stamped);
 }
 
 /// Shared spawn + streaming tail used by both [`launch`] (manifest lifecycle
@@ -556,6 +1049,7 @@ pub fn launch_via_shell(
 /// registry, echoes `display_line` to the terminal + log, and starts the two
 /// stdout/stderr reader threads. `spawn_label` is what shows up in the
 /// spawn-failure error message.
+#[allow(clippy::too_many_arguments)]
 fn spawn_and_stream(
     app_handle: &AppHandle,
     instance_id: &str,
@@ -564,6 +1058,7 @@ fn spawn_and_stream(
     display_line: String,
     spawn_label: String,
     java_path: Option<&str>,
+    restartable: bool,
 ) -> Result<(), String> {
     // 0. Start fresh: truncate latest.log so the seeded tail reflects only this
     //    run, not the previous run's `[process terminated …]` marker.
@@ -611,6 +1106,13 @@ fn spawn_and_stream(
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
+    // Own process group on Unix so the whole tree can be signalled as a unit.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+
     // 2. Spawn. Errors propagate to run_step → the red error banner in the UI,
     //    so a missing binary / bad command never fails silently.
     let mut child = cmd
@@ -621,6 +1123,16 @@ fn spawn_and_stream(
     // registry) so the metrics sampler can resolve the process tree without
     // contending for the child mutex.
     let pid = child.id();
+
+    // Tree handle (job object on Windows) + forced-kill flag shared with the
+    // teardown so `Exited { forced }` is accurate.
+    #[cfg(windows)]
+    let tree = attach_tree(&child);
+    #[cfg(unix)]
+    let _tree = attach_tree(&child);
+    let forced = Arc::new(AtomicBool::new(false));
+    let intentional = Arc::new(AtomicBool::new(false));
+    let started_secs = process_start_time(pid).unwrap_or_else(now_secs);
 
     let stdout = child
         .stdout
@@ -648,6 +1160,10 @@ fn spawn_and_stream(
                 child: Mutex::new(child),
                 stdin: Mutex::new(stdin),
                 pid,
+                forced: forced.clone(),
+                intentional: intentional.clone(),
+                #[cfg(windows)]
+                job: tree,
                 working_dir: working_dir.to_path_buf(),
             },
         );
@@ -691,8 +1207,7 @@ fn spawn_and_stream(
         let mut reader = BufReader::new(stderr);
         let mut buf: Vec<u8> = Vec::new();
         loop {
-            buf.clear();
-            match reader.read_until(b'\n', &mut buf) {
+            match read_line_capped(&mut reader, &mut buf) {
                 Ok(0) => return, // EOF
                 Ok(_) => {}
                 Err(e) => {
@@ -707,13 +1222,14 @@ fn spawn_and_stream(
     // --- stdout reader: forward lines, then on EOF do process teardown. ---
     let stdout_handle = app_handle.clone();
     let id = instance_id.to_string();
+    let stdout_forced = forced.clone();
+    let stdout_intentional = intentional.clone();
     std::thread::spawn(move || {
         let registry: tauri::State<'_, ProcessRegistry> = stdout_handle.state();
         let mut reader = BufReader::new(stdout);
         let mut buf: Vec<u8> = Vec::new();
         loop {
-            buf.clear();
-            match reader.read_until(b'\n', &mut buf) {
+            match read_line_capped(&mut reader, &mut buf) {
                 Ok(0) => break, // EOF — child closed stdout; do teardown below
                 Ok(_) => {}
                 Err(e) => {
@@ -730,12 +1246,22 @@ fn spawn_and_stream(
         let still_mine = registry.current_generation(&id).as_ref() == Some(&gen);
         if still_mine {
             // Remove our registry entry (and take the child to wait on it).
-            let child_opt = registry
+            // If the entry is already gone, the force-kill path owns the
+            // teardown events — stay silent to avoid a duplicate Exited.
+            let Some(removed) = registry
                 .processes
                 .lock()
                 .ok()
                 .and_then(|mut map| map.remove(&id))
-                .map(|rp| rp.child.into_inner().expect("child lock poisoned"));
+            else {
+                return;
+            };
+            let child_opt = Some(
+                removed
+                    .child
+                    .into_inner()
+                    .expect("child lock poisoned"),
+            );
             // The owned process exited — clear its persisted pid so a future
             // app restart doesn't try to re-adopt a dead process.
             let clear_handle = stdout_handle.clone();
@@ -743,6 +1269,7 @@ fn spawn_and_stream(
             let _ = crate::config::with_config_mut(&clear_handle, |cfg| {
                 if let Some(instance) = cfg.servers.get_mut(&clear_id) {
                     instance.pid = None;
+                    instance.pid_started = None;
                 }
                 Ok(())
             });
@@ -753,16 +1280,24 @@ fn spawn_and_stream(
                 },
                 None => None, // already removed (e.g. stop() took it) — no code
             };
+            let was_forced = stdout_forced.load(Ordering::SeqCst);
             let _ = stdout_handle.emit(
                 &status_event,
-                StatusPayload::Exited { code: exit_code },
+                StatusPayload::Exited {
+                    code: exit_code,
+                    forced: was_forced,
+                },
             );
             // The running set just shrank — notify the tray so its "active
             // servers" section + tooltip refresh.
             let _ = stdout_handle.emit("kern://running-set-changed", ());
-            let label = match exit_code {
-                Some(c) => format!("exit {c}"),
-                None => "no exit code".to_string(),
+            let label = if was_forced {
+                "killed".to_string()
+            } else {
+                match exit_code {
+                    Some(c) => format!("exit {c}"),
+                    None => "no exit code".to_string(),
+                }
             };
             let marker = format!("[process terminated ({})]", label);
             // Persist the marker to disk too — otherwise re-entering the view
@@ -771,10 +1306,80 @@ fn spawn_and_stream(
             // timestamp prefix itself, so pass the bare marker.
             append_log(&log_path, marker.as_bytes());
             let _ = stdout_handle.emit(&event_name, format!("{} {}", timestamp(), marker));
+
+            // Crash watchdog: restart unexpected exits of restartable launch
+            // steps (a "start" step, not an install/build step).
+            if restartable {
+                let was_intentional = stdout_intentional.load(Ordering::SeqCst);
+                let run_secs = now_secs().saturating_sub(started_secs);
+                if !was_intentional {
+                    // Snapshot the exit code + log tail so the UI can explain
+                    // the crash after the fact (and the notification links to it).
+                    crate::crash::record(&stdout_handle, &id, exit_code, was_forced);
+                }
+                crate::watchdog::on_process_exit(
+                    &stdout_handle,
+                    &id,
+                    exit_code,
+                    was_intentional,
+                    run_secs,
+                );
+            }
         }
     });
 
     Ok(())
+}
+
+/// Maximum bytes buffered for a single log line. A server that never emits a
+/// newline (binary garbage, a stuck progress bar) must not grow kern's memory
+/// without bound.
+const MAX_LOG_LINE_BYTES: usize = 256 * 1024;
+
+/// Reads up to and including the next `\n` into `buf`, capping how much is
+/// buffered at [`MAX_LOG_LINE_BYTES`]. Any excess is drained without buffering
+/// so the stream stays line-aligned. Returns total bytes consumed (0 = EOF).
+fn read_line_capped<R: BufRead>(reader: &mut R, buf: &mut Vec<u8>) -> std::io::Result<usize> {
+    buf.clear();
+    let mut total = 0usize;
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            return Ok(total);
+        }
+        let newline = available.iter().position(|b| *b == b'\n');
+        let take = newline.map(|p| p + 1).unwrap_or(available.len());
+        if buf.len() < MAX_LOG_LINE_BYTES {
+            let room = MAX_LOG_LINE_BYTES - buf.len();
+            buf.extend_from_slice(&available[..take.min(room)]);
+        }
+        reader.consume(take);
+        total += take;
+        if newline.is_some() {
+            return Ok(total);
+        }
+        if buf.len() >= MAX_LOG_LINE_BYTES {
+            // Line exceeded the cap — drain to the newline without buffering.
+            loop {
+                let more = reader.fill_buf()?;
+                if more.is_empty() {
+                    return Ok(total);
+                }
+                match more.iter().position(|b| *b == b'\n') {
+                    Some(pos) => {
+                        reader.consume(pos + 1);
+                        total += pos + 1;
+                        return Ok(total);
+                    }
+                    None => {
+                        let len = more.len();
+                        reader.consume(len);
+                        total += len;
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Forwards one read chunk to the UI + disk. Shared by the stdout and stderr
@@ -795,172 +1400,111 @@ fn forward_line(
     // Read raw bytes and lossy-convert: pipe output isn't guaranteed valid
     // UTF-8 (ANSI color codes, partial multibyte sequences at boundaries).
     let lossy = String::from_utf8_lossy(bytes);
-    let trimmed = lossy.trim_end_matches(['\r', '\n']);
+    let mut trimmed = lossy.trim_end_matches(['\r', '\n']).to_string();
     if trimmed.is_empty() {
         return;
+    }
+    if bytes.len() >= MAX_LOG_LINE_BYTES {
+        trimmed.push_str(" … [line truncated]");
     }
     append_log(log_path, trimmed.as_bytes());
     // Only stamp if the line didn't already arrive with its own timestamp;
     // emulated consoles sometimes print one of their own and we don't want to
     // double up.
-    let stamped = if has_timestamp(trimmed) {
-        trimmed.to_string()
+    let stamped = if has_timestamp(&trimmed) {
+        trimmed
     } else {
         format!("{} {}", timestamp(), trimmed)
     };
+    // User-defined log-pattern alerts (no-op when none are configured).
+    crate::logwatch::check(handle, id, &stamped);
     let _ = handle.emit(event_name, stamped);
 }
 
-/// Terminates a running instance by id. Returns Ok even if not running, so the
-/// UI can treat stop as idempotent.
-///
-/// This is a hard, immediate kill. For a graceful shutdown (e.g. letting a
-/// Minecraft server flush its world to disk before exiting) use
-/// [`stop_graceful`], which prefers a polite exit and only falls back to a hard
-/// kill on timeout.
-///
-/// Not currently called from any command (both the stop and restart paths use
-/// `stop_graceful`), but kept as the documented hard-kill primitive.
-#[allow(dead_code)]
-pub fn stop(app_handle: &AppHandle, instance_id: &str) -> Result<(), String> {
-    let registry: tauri::State<'_, ProcessRegistry> = app_handle.state();
-    let removed = {
-        let mut map = registry
-            .processes
-            .lock()
-            .map_err(|e| format!("process registry lock poisoned: {e}"))?;
-        map.remove(instance_id)
-    };
-    if let Some(proc) = removed {
-        // 1. Kill the process tree (taskkill on Windows, direct kill on Unix).
-        //    This ensures npm/npx wrappers (which spawn child node.exe processes)
-        //    are fully terminated rather than leaving orphans.
-        #[cfg(target_os = "windows")]
-        {
-            let _ = std::process::Command::new("taskkill")
-                .args(["/F", "/T", "/PID", &proc.pid.to_string()])
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn();
-        }
-
-        // 2. Kill the direct child handle so Rust's `Child` doesn't hang.
-        let mut child = proc.child.into_inner().expect("child lock poisoned");
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-    Ok(())
+/// Outcome of a stop request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopOutcome {
+    /// The process exited on its own after the graceful request.
+    Graceful,
+    /// The graceful window expired and the process tree was force-killed.
+    Forced,
 }
 
-/// Force-kills a re-adopted (PID-only) process by OS pid and removes it from
-/// the adopted registry. Used when the user stops a server that was re-adopted
-/// from a previous session — there's no Child handle or stdin pipe, so graceful
-/// shutdown is impossible; this is the only option. Emits the termination
-/// events so the UI + tray sync.
-pub fn force_kill_adopted(app_handle: &AppHandle, instance_id: &str) -> Result<(), String> {
-    // Read the pid without removing — `unadopt` (called below) does the removal
-    // + emits kern://running-set-changed.
-    let Some(pid) = pid_for(app_handle, instance_id) else {
-        return Ok(()); // wasn't adopted — nothing to do
-    };
-    if !is_adopted(app_handle, instance_id) {
-        return Ok(()); // owned, not adopted — not our path
-    }
-
-    // Kill the process tree by PID. Same pattern as `stop`'s Windows branch.
-    #[cfg(target_os = "windows")]
-    {
-        let _ = std::process::Command::new("taskkill")
-            .args(["/F", "/T", "/PID", &pid.to_string()])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn();
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        // SIGKILL the whole group if we were the group leader, else just the pid.
-        let _ = std::process::Command::new("kill")
-            .args(["-9", &pid.to_string()])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn();
-    }
-
-    // Remove from the adopted registry + emit the running-set-changed signal
-    // (unadopt centralizes both). Also emit the status:Exited event so the UI
-    // syncs, matching the owned-process teardown.
-    use tauri::Emitter;
-    let registry: tauri::State<'_, ProcessRegistry> = app_handle.state();
-    registry.unadopt(app_handle, instance_id);
-    let status_event = format!("status:{instance_id}");
-    let _ = app_handle.emit(
-        &status_event,
-        StatusPayload::Exited { code: None },
-    );
-    Ok(())
-}
-
-/// Gracefully shuts down a running instance by id.
+/// Stops a running instance with a staged, verified pipeline:
 ///
-/// Writes `stop` to the child's stdin and waits for it to exit on its own. For a
-/// Minecraft server this triggers a clean shutdown: it flushes chunks, saves the
-/// world, and exits — so the next start doesn't roll back to the last autosave.
+/// 1. **Graceful** — write `stdin_command` (if any) to the child's stdin and,
+///    on Unix, send SIGTERM to its process group (JVM/Node shutdown hooks run).
+/// 2. **Wait** — poll for exit up to `timeout`.
+/// 3. **Force** — terminate the whole tree (Job Object on Windows, SIGKILL to
+///    the process group on Unix), reap the child, then confirm the OS pid is
+///    actually gone before reporting success.
 ///
-/// If the child hasn't exited within `timeout`, we fall back to a hard `kill()`
-/// so a hung or unresponsive process can't wedge the stop button forever. Either
-/// way the registry entry is removed and the result is `Ok` — stop stays
-/// idempotent and always succeeds from the caller's perspective.
-///
-/// Unlike [`stop`], the entry is left in the registry during the wait so the
-/// stdout reader thread owns the normal EOF teardown path (it emits the
-/// `Exited` status + `[process terminated]` marker, which the UI uses to sync
-/// the sidebar status). We only remove the entry ourselves on the timeout path.
-pub fn stop_graceful(
+/// Idempotent: `Ok(Graceful)` when nothing is registered. Emits `Stopping`
+/// when a graceful phase starts; the normal reader-thread teardown emits
+/// `Exited { forced: false }`, while the forced path removes the entry itself
+/// and emits `Exited { forced: true }`.
+pub fn stop_managed(
     app_handle: &AppHandle,
     instance_id: &str,
-    timeout: std::time::Duration,
-) -> Result<(), String> {
+    timeout: Duration,
+    stdin_command: Option<&str>,
+) -> Result<StopOutcome, String> {
     let registry: tauri::State<'_, ProcessRegistry> = app_handle.state();
+    let status_event = format!("status:{instance_id}");
 
-    // 1. Send the polite shutdown command. We hold the stdin lock only for the
-    //    write, then drop it immediately so the reader threads (and any pending
-    //    console input) aren't blocked.
-    {
-        let mut map = registry
+    // Adopted processes have no child handle or pipes — force-kill by pid.
+    if registry.is_adopted(instance_id) {
+        crate::watchdog::reset(app_handle, instance_id);
+        let _ = app_handle.emit(&status_event, StatusPayload::Stopping);
+        force_kill_adopted(app_handle, instance_id)?;
+        return Ok(StopOutcome::Forced);
+    }
+
+    // Not tracked at all: nothing to stop. Never claim a kill we didn't do.
+    let pid = {
+        let map = registry
             .processes
             .lock()
             .map_err(|e| format!("process registry lock poisoned: {e}"))?;
-        let proc = match map.get_mut(instance_id) {
-            Some(p) => p,
-            None => return Ok(()), // not running — idempotent, like stop()
-        };
-        let mut guard = proc
-            .stdin
-            .lock()
-            .map_err(|e| format!("stdin lock poisoned: {e}"))?;
-        if let Some(stdin) = guard.as_mut() {
-            // "stop" is the canonical graceful-shutdown command for vanilla /
-            // Bukkit / Paper / Forge / Fabric servers. The trailing newline
-            // submits it to the server's command console.
-            if let Err(e) = stdin.write_all(b"stop\n") {
-                // A closed stdin means the child is already tearing itself down
-                // (or never had one) — fall through to the wait; the timeout +
-                // kill fallback still guarantees we don't hang.
-                eprintln!("[process] graceful stop: stdin write failed ({e}) — waiting for exit");
+        match map.get(instance_id) {
+            Some(proc) => {
+                // Mark the exit as user-requested so the crash watchdog does
+                // not immediately restart it.
+                proc.intentional.store(true, Ordering::SeqCst);
+                proc.pid
             }
-            let _ = stdin.flush();
+            None => return Ok(StopOutcome::Graceful),
+        }
+    };
+    crate::watchdog::reset(app_handle, instance_id);
+
+    let _ = app_handle.emit(&status_event, StatusPayload::Stopping);
+
+    // 1. Graceful phase: stdin command, then the platform signal.
+    if let Some(cmd) = stdin_command.map(str::trim).filter(|c| !c.is_empty()) {
+        let map = registry
+            .processes
+            .lock()
+            .map_err(|e| format!("process registry lock poisoned: {e}"))?;
+        if let Some(proc) = map.get(instance_id) {
+            let mut guard = proc
+                .stdin
+                .lock()
+                .map_err(|e| format!("stdin lock poisoned: {e}"))?;
+            if let Some(stdin) = guard.as_mut() {
+                // A closed stdin means the child is already tearing down.
+                if stdin.write_all(format!("{cmd}\n").as_bytes()).is_err() {
+                    eprintln!("[process] graceful stop: stdin write failed — waiting for exit");
+                }
+                let _ = stdin.flush();
+            }
         }
     }
+    graceful_signal(pid);
 
-    // 2. Wait for the child to exit on its own. We poll the exit status (which
-    //    reaps a zombie without blocking) on a short cadence until either it has
-    //    exited or we hit the timeout. Polling — rather than `child.wait()` on
-    //    the locked handle — keeps the lock uncontended: the stdout reader
-    //    thread needs the same handle for its teardown `wait()`, and holding it
-    //    for the whole timeout would deadlock that path.
+    // 2. Wait for the process to exit on its own.
     let deadline = std::time::Instant::now() + timeout;
     loop {
-        // try_wait needs the child lock, so only hold it for the probe itself.
         let exited = {
             let map = registry
                 .processes
@@ -972,43 +1516,156 @@ pub fn stop_graceful(
                         .child
                         .lock()
                         .map_err(|e| format!("child lock poisoned: {e}"))?;
-                    match child.try_wait() {
-                        Ok(Some(_)) => true,  // exited
-                        Ok(None) => false,    // still running
-                        Err(_) => true,       // couldn't query — treat as gone
-                    }
+                    !matches!(child.try_wait(), Ok(None))
                 }
-                None => return Ok(()), // already torn down by the reader thread
+                None => true, // reader thread already tore it down
             }
         };
         if exited {
-            // The child is gone; the stdout reader thread will (or already has)
-            // run the normal gen-guarded teardown — emit Exited + marker. We
-            // don't touch the entry so `still_mine` stays true.
-            return Ok(());
+            return Ok(StopOutcome::Graceful);
         }
         if std::time::Instant::now() >= deadline {
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(200));
+        std::thread::sleep(Duration::from_millis(200));
     }
 
-    // 3. Timed out — the process didn't heed `stop`. Force it so the stop
-    //    button can never hang. This is the same path as stop(): remove the
-    //    entry (so the reader thread's `still_mine` check fails and it stays
-    //    silent), then kill + wait.
+    // 3. Force. Mark forced + remove the entry under one lock so a racing
+    //    reader thread either sees `forced` or owns teardown, never both.
     let removed = {
         let mut map = registry
             .processes
             .lock()
             .map_err(|e| format!("process registry lock poisoned: {e}"))?;
-        map.remove(instance_id)
+        map.remove(instance_id).inspect(|proc| {
+            proc.forced.store(true, Ordering::SeqCst);
+        })
     };
-    if let Some(proc) = removed {
-        let mut child = proc.child.into_inner().expect("child lock poisoned");
-        let _ = child.kill();
-        let _ = child.wait();
+    let Some(proc) = removed else {
+        // Reader thread won the race (process exited right at the deadline);
+        // it owns the teardown event. Report the timeout truthfully.
+        return Ok(StopOutcome::Forced);
+    };
+
+    #[cfg(windows)]
+    let tree_killed = terminate_tree(proc.pid, &proc.job);
+    #[cfg(unix)]
+    let tree_killed = terminate_tree(proc.pid, &());
+
+    let mut child = proc
+        .child
+        .into_inner()
+        .map_err(|_| "child lock poisoned".to_string())?;
+    let _ = child.kill();
+    let _ = child.wait(); // reap the direct child
+
+    // Verify the OS pid is actually gone — job/taskkill are asynchronous and
+    // may fail silently (permissions, already-recycled pid, …).
+    let mut gone = false;
+    for _ in 0..25 {
+        if !pid_alive(proc.pid) {
+            gone = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
     }
+    if !gone {
+        return Err(format!(
+            "process {} (pid {}) survived the force-kill{}",
+            instance_id,
+            proc.pid,
+            if tree_killed { "" } else { " (tree-kill call failed)" }
+        ));
+    }
+
+    // Own the teardown events for the forced path.
+    let _ = crate::config::with_config_mut(app_handle, |cfg| {
+        if let Some(instance) = cfg.servers.get_mut(instance_id) {
+            instance.pid = None;
+            instance.pid_started = None;
+        }
+        Ok(())
+    });
+    let marker = "[process terminated (killed)]";
+    append_log(&proc.working_dir.join("latest.log"), marker.as_bytes());
+    let _ = app_handle.emit(
+        &format!("log:{instance_id}:stream"),
+        format!("{} {}", timestamp(), marker),
+    );
+    let _ = app_handle.emit(
+        &status_event,
+        StatusPayload::Exited {
+            code: None,
+            forced: true,
+        },
+    );
+    let _ = app_handle.emit("kern://running-set-changed", ());
+    Ok(StopOutcome::Forced)
+}
+
+/// Force-kills a re-adopted (PID-only) process by OS pid and removes it from
+/// the adopted registry. Used when the user stops a server that was re-adopted
+/// from a previous session — there's no Child handle or stdin pipe, so graceful
+/// shutdown is impossible; this is the only option. Emits the termination
+/// events so the UI + tray sync.
+pub fn force_kill_adopted(app_handle: &AppHandle, instance_id: &str) -> Result<(), String> {
+    crate::watchdog::reset(app_handle, instance_id);
+    // Read the pid without removing — `unadopt` (called below) does the removal
+    // + emits kern://running-set-changed.
+    let Some(pid) = pid_for(app_handle, instance_id) else {
+        return Ok(()); // wasn't adopted — nothing to do
+    };
+    if !is_adopted(app_handle, instance_id) {
+        return Ok(()); // owned, not adopted — not our path
+    }
+
+    // Kill the process tree by PID. Adopted processes have no Job Object, so
+    // Windows falls back to taskkill /T and Unix signals the process group
+    // (falling back to the single pid for pids adopted from older versions).
+    #[cfg(target_os = "windows")]
+    {
+        let mut cmd = silent_command("taskkill");
+        cmd.args(["/F", "/T", "/PID", &pid.to_string()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        let _ = cmd.status();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        if !signal_group(pid, libc::SIGKILL) {
+            let _ = unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+        }
+    }
+
+    // Confirm death before claiming success.
+    let mut gone = false;
+    for _ in 0..25 {
+        if !pid_alive(pid) {
+            gone = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    if !gone {
+        return Err(format!(
+            "adopted process for '{instance_id}' (pid {pid}) survived the force-kill"
+        ));
+    }
+
+    // Remove from the adopted registry + emit the running-set-changed signal
+    // (unadopt centralizes both). Also emit the status:Exited event so the UI
+    // syncs, matching the owned-process teardown.
+    use tauri::Emitter;
+    let registry: tauri::State<'_, ProcessRegistry> = app_handle.state();
+    registry.unadopt(app_handle, instance_id);
+    let status_event = format!("status:{instance_id}");
+    let _ = app_handle.emit(
+        &status_event,
+        StatusPayload::Exited {
+            code: None,
+            forced: true,
+        },
+    );
     Ok(())
 }
 
@@ -1042,8 +1699,8 @@ pub fn write_stdin(
     Ok(())
 }
 
-/// Whether an instance currently has a tracked running process — either an
-/// owned Child handle or a re-adopted PID-only monitor.
+/// Whether an instance currently has a tracked running process — an owned
+/// Child handle, a re-adopted PID-only monitor, or a start in flight.
 pub fn is_running(app_handle: &AppHandle, instance_id: &str) -> bool {
     let registry: tauri::State<'_, ProcessRegistry> = app_handle.state();
     let owned = registry
@@ -1054,11 +1711,19 @@ pub fn is_running(app_handle: &AppHandle, instance_id: &str) -> bool {
     if owned {
         return true;
     }
-    registry
+    let adopted = registry
         .adopted
         .lock()
         .map(|m| m.contains_key(instance_id))
-        .unwrap_or(false)
+        .unwrap_or(true); // poisoned = assume running (fail safe)
+    if adopted {
+        return true;
+    }
+    registry
+        .starting
+        .lock()
+        .map(|s| s.contains(instance_id))
+        .unwrap_or(true)
 }
 
 /// Returns the OS process id for a running instance, if it has one. Used by the
@@ -1072,4 +1737,149 @@ pub fn pid_for(app_handle: &AppHandle, instance_id: &str) -> Option<u32> {
 pub fn is_adopted(app_handle: &AppHandle, instance_id: &str) -> bool {
     let registry: tauri::State<'_, ProcessRegistry> = app_handle.state();
     registry.is_adopted(instance_id)
+}
+
+#[cfg(test)]
+mod tree_tests {
+    use super::*;
+
+    /// Polls until the pid disappears or ~5s elapses.
+    fn wait_gone(pid: u32) -> bool {
+        for _ in 0..25 {
+            if !pid_alive(pid) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        false
+    }
+
+    /// Windows: the Job Object must terminate the whole tree, including a
+    /// grandchild (the real-world case: cmd.exe wrapping java/node).
+    #[cfg(windows)]
+    #[test]
+    fn job_object_kills_process_tree() {
+        let mut cmd = silent_command("cmd.exe");
+        // Outer cmd spawns an inner cmd which runs a long ping — a real
+        // grandchild that a bare child.kill() would leave alive.
+        cmd.args(["/C", "cmd.exe /C ping -n 120 127.0.0.1 > nul"]);
+        cmd.stdout(Stdio::null()).stderr(Stdio::null());
+        cmd.stdin(Stdio::null());
+        let mut child = cmd.spawn().expect("spawn test process");
+        let pid = child.id();
+        let job = create_job_for(&child).expect("job object assignment");
+
+        let _ = terminate_tree(pid, &Some(job));
+        assert!(
+            wait_gone(pid),
+            "process tree survived TerminateJobObject"
+        );
+        let _ = child.wait(); // reap the direct child
+    }
+
+    /// Unix: signalling the child's process group must kill the whole tree.
+    #[cfg(unix)]
+    #[test]
+    fn process_group_sigkill_kills_tree() {
+        use std::os::unix::process::CommandExt;
+        // silent-spawn-ok: unix test — console windows don't exist here.
+        let mut cmd = Command::new("sh");
+        // The shell forks a background sleep; both must die with the group.
+        cmd.args(["-c", "sleep 120 & sleep 120"]);
+        cmd.process_group(0);
+        cmd.stdout(Stdio::null()).stderr(Stdio::null()).stdin(Stdio::null());
+        let mut child = cmd.spawn().expect("spawn test process");
+        let pid = child.id();
+
+        assert!(signal_group(pid, libc::SIGKILL), "killpg failed");
+        assert!(wait_gone(pid), "process group survived SIGKILL");
+        let _ = child.wait(); // reap the direct child
+    }
+
+    /// A `start` at the beginning of any shell segment must be rewritten to
+    /// `start /B` so it can't open a fresh console window. Pure string logic —
+    /// exercised on every platform (Windows semantics, no OS calls).
+    #[test]
+    fn leading_start_is_neutralized() {
+        assert_eq!(
+            neutralize_start_commands("start server.bat"),
+            "start /B server.bat"
+        );
+        assert_eq!(neutralize_start_commands("start"), "start /B");
+        assert_eq!(
+            neutralize_start_commands("  start /wait foo"),
+            "  start /B /wait foo"
+        );
+        assert_eq!(neutralize_start_commands("start\tfoo"), "start /B\tfoo");
+        assert_eq!(
+            neutralize_start_commands("echo hi && start foo"),
+            "echo hi && start /B foo"
+        );
+        assert_eq!(
+            neutralize_start_commands("a || start b | start c"),
+            "a || start /B b | start /B c"
+        );
+        assert_eq!(
+            neutralize_start_commands("(start b)"),
+            "(start /B b)"
+        );
+        // Untouched: quoted text, lookalike names, non-leading positions.
+        assert_eq!(
+            neutralize_start_commands("echo \"start foo\""),
+            "echo \"start foo\""
+        );
+        assert_eq!(neutralize_start_commands("startswith foo"), "startswith foo");
+        assert_eq!(neutralize_start_commands("start.bat"), "start.bat");
+        assert_eq!(neutralize_start_commands("echo start foo"), "echo start foo");
+    }
+
+    /// Windows: the behavioral proof behind the "no console windows ever"
+    /// guarantee — a child spawned through `silent_command` owns no top-level
+    /// window at all, no matter the console subsystem it uses.
+    #[cfg(windows)]
+    #[test]
+    fn silent_command_child_owns_no_window() {
+        use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM};
+        use windows_sys::Win32::UI::WindowsAndMessaging::{EnumWindows, GetWindowThreadProcessId};
+
+        struct Probe {
+            pid: u32,
+            found: bool,
+        }
+
+        extern "system" fn visit(hwnd: HWND, lparam: LPARAM) -> BOOL {
+            let probe = unsafe { &mut *(lparam as *mut Probe) };
+            let mut pid = 0u32;
+            unsafe {
+                GetWindowThreadProcessId(hwnd, &mut pid);
+            }
+            if pid == probe.pid {
+                probe.found = true;
+                return 0; // stop enumerating
+            }
+            1
+        }
+
+        let mut cmd = silent_command("cmd.exe");
+        cmd.args(["/C", "ping -n 3 127.0.0.1 > nul"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut child = cmd.spawn().expect("spawn hidden child");
+        let pid = child.id();
+        // Give an (unwanted) console window time to materialize.
+        std::thread::sleep(Duration::from_millis(600));
+
+        let mut probe = Probe { pid, found: false };
+        unsafe {
+            EnumWindows(Some(visit), &mut probe as *mut Probe as LPARAM);
+        }
+
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(
+            !probe.found,
+            "silent child owned a top-level window (pid {pid})"
+        );
+    }
 }

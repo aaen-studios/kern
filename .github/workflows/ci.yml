@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  frontend:
+    name: Frontend (typecheck + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Typecheck + build
+        run: bun run build
+      - name: Silent-spawn guard
+        run: node scripts/check-silent-spawns.mjs
+      - name: Tests
+        run: bun test
+
+  rust:
+    name: Rust (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            patchelf \
+            build-essential \
+            curl wget file
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Frontend assets (required by the Tauri context)
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Clippy (deny warnings)
+        run: cargo clippy --lib -- -D warnings
+        working-directory: src-tauri
+
+      - name: Tests
+        run: cargo test --lib
+        working-directory: src-tauri
+
+      - name: Installer (Windows): clippy + tests
+        if: runner.os == 'Windows'
+        run: |
+          cargo clippy --manifest-path installer/Cargo.toml -- -D warnings
+          cargo test --manifest-path installer/Cargo.toml
+
+      - name: Build debug binary (E2E)
+        if: runner.os == 'Windows'
+        run: cargo build
+        working-directory: src-tauri
+
+      - name: End-to-end stop verification
+        if: runner.os == 'Windows'
+        run: bun run e2e:stop
