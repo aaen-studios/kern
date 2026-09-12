@@ -100,7 +100,16 @@ jobs:
           # only needs the dmg.
           TAURI_BUNDLES: ${{ runner.os == 'Linux' && 'appimage' || runner.os == 'macOS' && 'dmg' || '' }}
           UPDATER_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: ./deploy.sh
+        run: |
+          set +e
+          ./deploy.sh 2>&1 | tee deploy.log
+          code=${PIPESTATUS[0]}
+          if [ "$code" -ne 0 ]; then
+            # Surface the failure as a check annotation (job logs need auth).
+            MSG=$(tail -n 40 deploy.log | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g; s/\r//g')
+            echo "::error title=Release build failure (${{ matrix.label }})::$MSG"
+          fi
+          exit "$code"
 
       - name: Upload release assets
         uses: actions/upload-artifact@v4
