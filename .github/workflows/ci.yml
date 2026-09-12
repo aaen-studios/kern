@@ -48,7 +48,10 @@ jobs:
             build-essential \
             curl wget file
 
-      - uses: dtolnay/rust-toolchain@stable
+      # Pinned to the toolchain this release is developed and tested with
+      # (rust-toolchain.toml channel = stable, currently 1.91.x). Bump CI and
+      # local together to avoid new-lint churn failing unrelated changes.
+      - uses: dtolnay/rust-toolchain@1.91.1
         with:
           components: clippy
 

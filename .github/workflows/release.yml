@@ -67,7 +67,8 @@ jobs:
             build-essential \
             curl wget file
 
-      - uses: dtolnay/rust-toolchain@stable
+      # Same pinned toolchain as ci.yml / local development (see ci.yml note).
+      - uses: dtolnay/rust-toolchain@1.91.1
 
       - uses: oven-sh/setup-bun@v2
         with:
