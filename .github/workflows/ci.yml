@@ -73,7 +73,7 @@ jobs:
         run: cargo test --lib
         working-directory: src-tauri
 
-      - name: Installer (Windows): clippy + tests
+      - name: "Installer (Windows): clippy + tests"
         if: runner.os == 'Windows'
         run: |
           cargo clippy --manifest-path installer/Cargo.toml -- -D warnings
