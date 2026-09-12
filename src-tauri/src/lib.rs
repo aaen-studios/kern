@@ -68,7 +68,10 @@ pub fn run() {
     //
     // Debug-only escape hatch: the E2E stop harness (`scripts/e2e-stop.mjs`)
     // runs an isolated instance (temporary APPDATA) alongside the developer's
-    // real app, so it must skip the single-instance forwarding.
+    // real app, so it must skip the single-instance forwarding. (macOS doesn't
+    // register single-instance at all, so neither the flag nor the block
+    // exists there.)
+    #[cfg(not(target_os = "macos"))]
     let e2e_isolated = cfg!(debug_assertions)
         && std::env::var("KERN_E2E_ISOLATED")
             .map(|v| v == "1")

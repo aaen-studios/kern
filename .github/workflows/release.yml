@@ -17,7 +17,9 @@ permissions:
 
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: false
+  # A newer tag build supersedes an older one for the same ref; without this,
+  # a queued run waits behind a long build (and the publish job never runs).
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -106,7 +108,15 @@ jobs:
           code=${PIPESTATUS[0]}
           if [ "$code" -ne 0 ]; then
             # Surface the failure as a check annotation (job logs need auth).
-            MSG=$(tail -n 40 deploy.log | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g; s/\r//g')
+            # Cargo uses `\r` progress redraws, so grep error lines first and
+            # append a log tail for context.
+            MSG=$(
+              {
+                grep -aE 'error(\[|:)|✗|panicked at|failed to' deploy.log | tail -n 25
+                echo '--- tail ---'
+                tail -n 15 deploy.log
+              } | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g; s/\r//g'
+            )
             echo "::error title=Release build failure (${{ matrix.label }})::$MSG"
           fi
           exit "$code"
