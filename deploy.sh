@@ -213,27 +213,33 @@ with zipfile.ZipFile(sys.argv[1], 'w', zipfile.ZIP_DEFLATED) as zf:
     for f in "$BUNDLE_DIR"/*.dmg; do
       [ -f "$f" ] && INSTALLER="$f" && break
     done
-    # The updater needs a `.app.tar.gz` (it swaps the .app bundle); a dmg is
-    # only the human-facing installer. Build the tarball from the bundle.
+    # The updater needs a `.app.tar.gz` (it extracts and swaps the .app
+    # bundle); a dmg is only the human-facing installer. The .app is produced
+    # by the `app` bundle target — the release workflow builds `app,dmg`, but
+    # accept any *.app name here just in case.
     APP_DIR="src-tauri/target/release/bundle/macos"
-    if [ -d "$APP_DIR/kern.app" ]; then
-      ARCHIVE="$APP_DIR/kern.app.tar.gz"
-      echo "⟳ Creating $ARCHIVE ..."
-      rm -f "$ARCHIVE"
-      tar czf "$ARCHIVE" -C "$APP_DIR" kern.app
-    elif [ -n "$INSTALLER" ]; then
-      # Fallback: no .app bundle (older Tauri output) — gzip the dmg.
-      ARCHIVE="${INSTALLER}.gz"
-      echo "⟳ Creating $ARCHIVE ..."
-      rm -f "$ARCHIVE"
-      gzip -c "$INSTALLER" > "$ARCHIVE"
-    else
-      for f in "$APP_DIR"/*.app.tar.gz; do
-        [ -f "$f" ] && ARCHIVE="$f" && break
+    APP_BUNDLE=""
+    if [ -d "$APP_DIR" ]; then
+      for d in "$APP_DIR"/*.app; do
+        [ -d "$d" ] && APP_BUNDLE="$d" && break
       done
     fi
-    if [ -z "${INSTALLER:-}" ]; then
-      echo "! No .dmg or .app found — check build output."
+    if [ -n "$APP_BUNDLE" ]; then
+      APP_NAME="$(basename "$APP_BUNDLE")"
+      ARCHIVE="$APP_DIR/${APP_NAME}.tar.gz"
+      echo "⟳ Creating $ARCHIVE ..."
+      rm -f "$ARCHIVE"
+      tar czf "$ARCHIVE" -C "$APP_DIR" "$APP_NAME"
+    fi
+    if [ -z "${INSTALLER:-}" ] && [ -z "${ARCHIVE:-}" ]; then
+      echo "! No .dmg or .app found — check build output (build with --bundles app,dmg)."
+      exit 1
+    fi
+    # A macOS updater archive must be the .app tarball; do not fall back to a
+    # gzipped dmg, which the updater cannot install.
+    if [ -z "${ARCHIVE:-}" ]; then
+      echo "! macOS updater archive requires the .app bundle — build with"
+      echo "  --bundles app,dmg (see .github/workflows/release.yml)."
       exit 1
     fi
     ;;

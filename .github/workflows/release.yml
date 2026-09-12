@@ -101,8 +101,8 @@ jobs:
           # The standalone installer replaces the NSIS bundle on Windows.
           KERN_CUSTOM_INSTALLER: ${{ runner.os == 'Windows' && '1' || '0' }}
           # Narrow bundles on CI: Linux runners lack the rpm toolchain; macOS
-          # only needs the dmg.
-          TAURI_BUNDLES: ${{ runner.os == 'Linux' && 'appimage' || runner.os == 'macOS' && 'dmg' || '' }}
+          # needs both `app` (the updater's .app.tar.gz source) and `dmg`.
+          TAURI_BUNDLES: ${{ runner.os == 'Linux' && 'appimage' || runner.os == 'macOS' && 'app,dmg' || '' }}
           UPDATER_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           set +e
