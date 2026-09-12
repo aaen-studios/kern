@@ -1,12 +1,16 @@
 import type { ReactNode } from "react";
+import { CodeCopy } from "@/components/docs/CodeCopy";
+import { slugify } from "./slug";
 
 /*
   Zero-dependency markdown renderer (§9.3). GitHub release bodies and our
   authored docs only use a tiny subset. Handles:
-    - triple-backtick fenced code blocks ```lang ... ```
-    - ## / ### headings  (and # as h1)
+    - triple-backtick fenced code blocks ```lang ... ``` (with copy button)
+    - ## / ### headings  (and # as h1)  → anchor ids from lib/slug
     - unordered lists: lines starting with - or *
     - ordered lists: lines starting with N.
+    - tables: | a | b | with a |---|---| separator
+    - horizontal rules: --- / *** / ___
     - blockquotes: > note / > warn / > danger (callouts)
     - paragraphs
   Inline: `code`, **bold**, _italic_, [text](url).
@@ -126,7 +130,23 @@ type Block =
   | { type: "ol"; items: InlineToken[][] }
   | { type: "callout"; kind: "note" | "warn" | "danger"; items: InlineToken[][] }
   | { type: "quote"; items: InlineToken[][] }
+  | { type: "table"; header: InlineToken[][]; rows: InlineToken[][][] }
+  | { type: "hr" }
   | { type: "para"; inline: InlineToken[] };
+
+/** `| a | b |` → ["a", "b"] */
+function splitTableRow(line: string): string[] {
+  return line
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim());
+}
+
+function isTableSeparator(line: string): boolean {
+  return /^\|?[\s:|-]+\|[\s:|-]+$/.test(line.trim());
+}
 
 function parseBlocks(md: string): Block[] {
   const lines = md.replace(/\r\n/g, "\n").split("\n");
@@ -148,6 +168,30 @@ function parseBlocks(md: string): Block[] {
       }
       i++; // skip closing fence
       blocks.push({ type: "code", lang, content: codeLines.join("\n") });
+      continue;
+    }
+
+    // horizontal rule
+    if (/^(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+      blocks.push({ type: "hr" });
+      i++;
+      continue;
+    }
+
+    // table: a |...| header row followed by a |---|---| separator
+    if (
+      /^\|.*\|\s*$/.test(line) &&
+      i + 1 < lines.length &&
+      isTableSeparator(lines[i + 1])
+    ) {
+      const header = splitTableRow(line).map(parseInline);
+      i += 2;
+      const rows: InlineToken[][][] = [];
+      while (i < lines.length && /^\|.*\|\s*$/.test(lines[i])) {
+        rows.push(splitTableRow(lines[i]).map(parseInline));
+        i++;
+      }
+      blocks.push({ type: "table", header, rows });
       continue;
     }
 
@@ -224,7 +268,9 @@ function parseBlocks(md: string): Block[] {
       !/^#{1,4}\s/.test(lines[i]) &&
       !/^>\s?/.test(lines[i]) &&
       !/^\s*[-*]\s+/.test(lines[i]) &&
-      !/^\s*\d+\.\s+/.test(lines[i])
+      !/^\s*\d+\.\s+/.test(lines[i]) &&
+      !/^\|.*\|\s*$/.test(lines[i]) &&
+      !/^(-{3,}|\*{3,}|_{3,})\s*$/.test(lines[i])
     ) {
       paraLines.push(lines[i]);
       i++;
@@ -255,18 +301,20 @@ export function Markdown({ content }: { content: string }) {
         switch (b.type) {
           case "code":
             return (
-              <pre
-                key={bi}
-                className="overflow-x-auto bg-bg-core p-4 font-mono text-[12px] leading-relaxed text-zinc-200"
-                style={{ boxShadow: "inset 0 0 0 1px rgba(22,25,32,0.9)" }}
-              >
-                {b.lang && (
-                  <div className="mb-2 font-mono text-[10px] lowercase text-signal-low">
-                    {b.lang}
-                  </div>
-                )}
-                <code>{b.content}</code>
-              </pre>
+              <div key={bi} className="relative group">
+                <pre
+                  className="overflow-x-auto bg-bg-core p-4 font-mono text-[12px] leading-relaxed text-zinc-200"
+                  style={{ boxShadow: "inset 0 0 0 1px rgba(22,25,32,0.9)" }}
+                >
+                  {b.lang && (
+                    <div className="mb-2 font-mono text-[10px] lowercase text-signal-low">
+                      {b.lang}
+                    </div>
+                  )}
+                  <code>{b.content}</code>
+                </pre>
+                <CodeCopy text={b.content} />
+              </div>
             );
           case "heading": {
             const cls =
@@ -278,23 +326,65 @@ export function Markdown({ content }: { content: string }) {
                     ? "mt-5 text-lg text-zinc-100"
                     : "mt-4 text-base text-zinc-200";
             const level = Math.min(b.level, 4) as 1 | 2 | 3 | 4;
+            const plain = b.inline.map((t) => t.v).join(" ").replace(/\s+/g, " ");
+            const id = level > 1 ? slugify(plain) : undefined;
             const inner = renderInline(b.inline);
             const heading =
               level === 1 ? (
-                <h1>{inner}</h1>
+                <h1 id={id}>{inner}</h1>
               ) : level === 2 ? (
-                <h2>{inner}</h2>
+                <h2 id={id}>{inner}</h2>
               ) : level === 3 ? (
-                <h3>{inner}</h3>
+                <h3 id={id}>{inner}</h3>
               ) : (
-                <h4>{inner}</h4>
+                <h4 id={id}>{inner}</h4>
               );
             return (
-              <div key={bi} className={`font-mono lowercase ${cls}`}>
+              <div key={bi} className={`scroll-mt-24 font-mono lowercase ${cls}`}>
                 {heading}
               </div>
             );
           }
+          case "table":
+            return (
+              <div key={bi} className="overflow-x-auto">
+                <table className="w-full border-collapse text-[12px]">
+                  <thead>
+                    <tr>
+                      {b.header.map((cell, ci) => (
+                        <th
+                          key={ci}
+                          className="border border-grid-bounds bg-bg-surface px-3 py-2 text-left font-mono text-[11px] lowercase text-signal-low"
+                        >
+                          {renderInline(cell)}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {b.rows.map((row, ri) => (
+                      <tr key={ri}>
+                        {row.map((cell, ci) => (
+                          <td
+                            key={ci}
+                            className="border border-grid-bounds px-3 py-2 align-top text-zinc-300"
+                          >
+                            {renderInline(cell)}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            );
+          case "hr":
+            return (
+              <div
+                key={bi}
+                className="my-6 h-px bg-gradient-to-r from-transparent via-grid-bounds to-transparent"
+              />
+            );
           case "ul":
             return (
               <ul key={bi} className="space-y-1.5 pl-1">

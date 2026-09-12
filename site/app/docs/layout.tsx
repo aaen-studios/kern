@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { Metadata } from "next";
-import { getDocNav } from "@/lib/docs";
+import { getDocNav, getSearchSections } from "@/lib/docs";
+import { getRelease, formatVersion } from "@/lib/github";
 import { DocSearch } from "@/components/docs/DocSearch";
 
 export const metadata: Metadata = {
@@ -9,21 +10,30 @@ export const metadata: Metadata = {
     "kern docs hub — getting started, plugin development, manifest reference, and architecture.",
 };
 
-export default function DocsLayout({
+export default async function DocsLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
   const nav = getDocNav();
   const allDocs = nav.flatMap((g) => g.docs);
+  const sections = getSearchSections();
+  // Build-time release fetch; null on failure so the layout never crashes.
+  const release = await getRelease();
+  const version = release?.tag_name ? formatVersion(release.tag_name) : null;
 
   return (
-    <div className="mx-auto max-w-[1080px] px-4 pb-24 pt-24 sm:px-6">
+    <div className="mx-auto max-w-[1180px] px-4 pb-24 pt-24 sm:px-6">
       <div className="grid grid-cols-1 gap-10 lg:grid-cols-[220px_1fr]">
         {/* sidebar */}
         <aside className="lg:sticky lg:top-24 lg:self-start">
           <div className="mb-5">
-            <DocSearch docs={allDocs} />
+            <DocSearch docs={allDocs} sections={sections} />
+            {version && (
+              <p className="mt-2 font-mono text-[10px] lowercase text-signal-low">
+                docs for {version}
+              </p>
+            )}
           </div>
           <nav aria-label="docs">
             {nav.map((group) => (
@@ -49,7 +59,7 @@ export default function DocsLayout({
         </aside>
 
         {/* prose */}
-        <div className="min-w-0 max-w-[820px]">{children}</div>
+        <div className="min-w-0">{children}</div>
       </div>
     </div>
   );

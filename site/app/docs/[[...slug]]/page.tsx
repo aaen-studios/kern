@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { getAllDocs, getDocBySlug } from "@/lib/docs";
 import { Markdown } from "@/lib/markdown";
 import { MatrixDivider } from "@/components/ui/MatrixBorder";
+import { DocToc } from "@/components/docs/DocToc";
 
 /*
   Docs catch-all. /docs → overview; /docs/<slug> → that doc.
@@ -47,51 +48,66 @@ export default async function DocPage(props: PageProps<"/docs/[[...slug]]">) {
   const editUrl = `https://github.com/ellipog/kern-web/edit/main/content/docs/${doc.slug}.md`;
 
   return (
-    <article>
-      <header className="mb-8">
-        <p className="font-mono text-xs lowercase text-signal-low">
-          {"// "}{doc.group}
-        </p>
-        <h1 className="mt-2 font-mono text-3xl lowercase text-zinc-100">
-          {doc.title}
-        </h1>
-        <p className="mt-2 font-mono text-xs text-signal-low">{doc.description}</p>
-      </header>
+    <div className="xl:flex xl:gap-10">
+      <article className="min-w-0 max-w-[820px] flex-1">
+        <header className="mb-8">
+          <p className="font-mono text-xs lowercase text-signal-low">
+            {"// "}{doc.group}
+          </p>
+          <h1 className="mt-2 font-mono text-3xl lowercase text-zinc-100">
+            {doc.title}
+          </h1>
+          <p className="mt-2 font-mono text-xs text-signal-low">{doc.description}</p>
+        </header>
 
-      <MatrixDivider className="mb-8 opacity-60" />
+        <MatrixDivider className="mb-8 opacity-60" />
 
-      <Markdown content={doc.body} />
+        <Markdown content={doc.body} />
 
-      <MatrixDivider className="my-8 opacity-50" />
+        <MatrixDivider className="my-8 opacity-50" />
 
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex gap-4">
-          {prev && (
-            <Link
-              href={`/docs/${prev.slug}`}
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex gap-4">
+            {prev && (
+              <Link
+                href={`/docs/${prev.slug}`}
+                className="font-mono text-[11px] lowercase text-signal-low transition-colors hover:text-signal-high"
+              >
+                ← {prev.title}
+              </Link>
+            )}
+            {next && (
+              <Link
+                href={`/docs/${next.slug}`}
+                className="font-mono text-[11px] lowercase text-signal-low transition-colors hover:text-signal-high"
+              >
+                {next.title} →
+              </Link>
+            )}
+          </div>
+          <div className="flex items-center gap-4">
+            {doc.updated && (
+              <span className="font-mono text-[11px] lowercase text-signal-low">
+                updated {doc.updated}
+              </span>
+            )}
+            <a
+              href={editUrl}
+              target="_blank"
+              rel="noopener noreferrer"
               className="font-mono text-[11px] lowercase text-signal-low transition-colors hover:text-signal-high"
             >
-              ← {prev.title}
-            </Link>
-          )}
-          {next && (
-            <Link
-              href={`/docs/${next.slug}`}
-              className="font-mono text-[11px] lowercase text-signal-low transition-colors hover:text-signal-high"
-            >
-              {next.title} →
-            </Link>
-          )}
+              edit on github ↗
+            </a>
+          </div>
         </div>
-        <a
-          href={editUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="font-mono text-[11px] lowercase text-signal-low transition-colors hover:text-signal-high"
-        >
-          edit on github ↗
-        </a>
-      </div>
-    </article>
+      </article>
+
+      <aside className="hidden w-[180px] shrink-0 xl:block">
+        <div className="sticky top-24">
+          <DocToc headings={doc.headings} />
+        </div>
+      </aside>
+    </div>
   );
 }

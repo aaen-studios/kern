@@ -2,7 +2,7 @@
 title: notifications & webhooks
 group: Using kern
 slug: notifications
-order: 21
+order: 15
 description: native toasts, discord/slack webhooks, and regex log alerts.
 ---
 

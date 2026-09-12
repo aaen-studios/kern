@@ -15,8 +15,11 @@ think of it as a self-hosted alternative to cloud game-panel tools (pterodactyl,
 ## where to start
 
 - **new to kern?** start with `getting-started` — download, register your first instance, start it.
+- **running servers daily?** `cli` for the terminal and dashboard, `backups` and `tasks` for the overnight safety net.
 - **building a plugin?** read `manifest-reference` first, then `lifecycle`, `config-schema`, and `plugin-ui`.
+- **writing scripts?** `automation-api` is the full JSON surface, `cli` is the friendly client.
 - **publishing?** see `distribution` for the registry flow.
+- **stuck?** `troubleshooting` maps symptoms to fixes; `recipes` has copy-paste setups.
 
 ## the big ideas
 
