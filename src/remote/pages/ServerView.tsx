@@ -1,19 +1,18 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { api, apiRaw } from "../lib/api";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { api } from "../lib/api";
 import { fmtAgo, fmtBytes, fmtUptime, statusDotClass } from "../lib/format";
 import { navigate } from "../lib/router";
 import { can, canServer } from "../lib/roles";
 import { useServers } from "../lib/servers";
-import { downloadInstanceFile, useSse } from "../lib/sse";
+import { useSse } from "../lib/sse";
 import { useToast } from "../lib/toast";
-import type {
-  AuthUser,
-  Backup,
-  FileEntry,
-  MetricSample,
-  ServerSummary,
-  Task,
-} from "../lib/types";
+import type { AuthUser, Backup, MetricSample, ServerSummary, Task } from "../lib/types";
+
+const FilesFeature = lazy(() =>
+  import("../features/files/FilesFeature").then((module) => ({
+    default: module.FilesFeature,
+  })),
+);
 
 const TABS = ["console", "metrics", "files", "backups", "tasks"] as const;
 type Tab = (typeof TABS)[number];
@@ -126,7 +125,17 @@ export function ServerView({
       <div className="min-h-0 flex-1 pt-4">
         {active === "console" && <ConsoleTab server={server} allowed={allowed} />}
         {active === "metrics" && <MetricsTab server={server} />}
-        {active === "files" && <FilesTab server={server} allowed={allowed} />}
+        {active === "files" && (
+          <Suspense
+            fallback={
+              <p className="py-8 text-center font-mono text-[11px] text-zinc-600">
+                loading editor…
+              </p>
+            }
+          >
+            <FilesFeature serverId={server.id} allowed={allowed} />
+          </Suspense>
+        )}
         {active === "backups" && <BackupsTab server={server} allowed={allowed} />}
         {active === "tasks" && <TasksTab server={server} allowed={allowed} />}
       </div>
@@ -366,203 +375,6 @@ function Chart({ samples }: { samples: MetricSample[] }) {
   );
 }
 
-/* ── files (basic; upgraded to Monaco/tree/tabs next) ────────────────── */
-
-function FilesTab({ server, allowed }: { server: ServerSummary; allowed: boolean }) {
-  const [path, setPath] = useState("");
-  const [entries, setEntries] = useState<FileEntry[]>([]);
-  const [file, setFile] = useState<{ path: string; content: string; mtime: number } | null>(null);
-  const { push } = useToast();
-
-  const load = async (target = path) => {
-    try {
-      const data = await api<{ entries: FileEntry[] }>(
-        `/servers/${encodeURIComponent(server.id)}/files?path=${encodeURIComponent(target)}`,
-      );
-      setEntries(
-        [...(data.entries ?? [])].sort((a, b) =>
-          a.isDir !== b.isDir ? (a.isDir ? -1 : 1) : a.name.localeCompare(b.name),
-        ),
-      );
-    } catch (err) {
-      push(err instanceof Error ? err.message : "listing failed", "error");
-    }
-  };
-
-  useEffect(() => {
-    void load("");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [server.id]);
-
-  const openFile = async (rel: string) => {
-    try {
-      const data = await api<{ content: string; mtime: number }>(
-        `/servers/${encodeURIComponent(server.id)}/file?path=${encodeURIComponent(rel)}`,
-      );
-      setFile({ path: rel, content: data.content, mtime: data.mtime });
-    } catch (err) {
-      push(err instanceof Error ? err.message : "read failed", "error");
-    }
-  };
-
-  const save = async () => {
-    if (!file) return;
-    try {
-      await api(`/servers/${encodeURIComponent(server.id)}/file`, {
-        method: "PUT",
-        json: { path: file.path, content: file.content, expectedMtime: file.mtime },
-      });
-      push("saved", "success");
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "save failed";
-      if (message.includes("conflict:")) {
-        if (confirm("this file changed on disk. overwrite anyway?")) {
-          await api(`/servers/${encodeURIComponent(server.id)}/file`, {
-            method: "PUT",
-            json: { path: file.path, content: file.content },
-          });
-          push("saved (overwrote)", "warn");
-        }
-      } else {
-        push(message, "error");
-      }
-    }
-  };
-
-  return (
-    <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
-      <div className="border border-grid-bounds bg-bg-surface">
-        <div className="flex items-center gap-1 border-b border-grid-bounds px-2 py-1.5">
-          <button
-            onClick={() => {
-              const parts = path.split("/").filter(Boolean);
-              parts.pop();
-              const next = parts.join("/");
-              setPath(next);
-              void load(next);
-            }}
-            className="font-mono text-[10px] text-zinc-500 hover:text-zinc-300"
-          >
-            ↑ up
-          </button>
-          <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-zinc-600">
-            /{path}
-          </span>
-          {allowed && (
-            <button
-              onClick={async () => {
-                const name = prompt("upload file");
-                if (!name) return;
-                const input = document.createElement("input");
-                input.type = "file";
-                input.onchange = async () => {
-                  const chosen = input.files?.[0];
-                  if (!chosen) return;
-                  const rel = path ? `${path}/${chosen.name}` : chosen.name;
-                  try {
-                    const res = await apiRaw(
-                      `/servers/${encodeURIComponent(server.id)}/upload?path=${encodeURIComponent(rel)}`,
-                      { method: "POST", body: chosen },
-                    );
-                    if (!res.ok) throw new Error("upload failed");
-                    push(`uploaded ${chosen.name}`, "success");
-                    void load(path);
-                  } catch (err) {
-                    push(err instanceof Error ? err.message : "upload failed", "error");
-                  }
-                };
-                input.click();
-              }}
-              className="font-mono text-[10px] text-zinc-500 hover:text-zinc-300"
-            >
-              upload
-            </button>
-          )}
-        </div>
-        <div className="max-h-[60vh] overflow-y-auto">
-          {entries.map((entry) => {
-            const rel = path ? `${path}/${entry.name}` : entry.name;
-            return (
-              <div
-                key={entry.name}
-                className="flex cursor-pointer items-center gap-2 border-b border-grid-bounds/40 px-2 py-1.5 hover:bg-bg-core"
-                onClick={() => {
-                  if (entry.isDir) {
-                    setPath(rel);
-                    void load(rel);
-                  } else {
-                    void openFile(rel);
-                  }
-                }}
-              >
-                <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-zinc-300">
-                  {entry.isDir ? "▸ " : ""}
-                  {entry.name}
-                </span>
-                {!entry.isDir && (
-                  <button
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      void downloadInstanceFile(server.id, rel, entry.name).catch(() =>
-                        push("download failed", "error"),
-                      );
-                    }}
-                    className="font-mono text-[10px] text-zinc-600 hover:text-signal-high"
-                  >
-                    get
-                  </button>
-                )}
-                <span className="font-mono text-[10px] text-zinc-600">
-                  {entry.isDir ? "" : fmtBytes(entry.size)}
-                </span>
-              </div>
-            );
-          })}
-          {entries.length === 0 && (
-            <p className="px-2 py-3 font-mono text-[11px] text-zinc-600">empty.</p>
-          )}
-        </div>
-      </div>
-
-      <div className="border border-grid-bounds bg-bg-surface">
-        {file ? (
-          <>
-            <div className="flex items-center gap-2 border-b border-grid-bounds px-2 py-1.5">
-              <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-zinc-300">
-                {file.path}
-              </span>
-              {allowed && (
-                <button
-                  onClick={() => void save()}
-                  className="font-mono text-[10px] text-signal-high"
-                >
-                  save
-                </button>
-              )}
-              <button
-                onClick={() => setFile(null)}
-                className="font-mono text-[10px] text-zinc-500"
-              >
-                close
-              </button>
-            </div>
-            <textarea
-              value={file.content}
-              onChange={(e) => setFile({ ...file, content: e.target.value })}
-              spellCheck={false}
-              className="h-[55vh] w-full resize-none bg-black p-3 font-mono text-[11.5px] leading-relaxed text-zinc-200 outline-none"
-            />
-          </>
-        ) : (
-          <p className="px-3 py-4 font-mono text-[11px] text-zinc-600">
-            select a file to edit. (a full editor with a tree, tabs and search is
-            landing in this build.)
-          </p>
-        )}
-      </div>
-    </div>
-  );
-}
 
 /* ── backups ─────────────────────────────────────────────────────────── */
 

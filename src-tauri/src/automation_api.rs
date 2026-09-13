@@ -29,6 +29,7 @@ use crate::crash;
 use crate::metrics::{MetricsHistory, MetricsState};
 use crate::process;
 use crate::scheduler;
+use crate::snapshots;
 use crate::web_remote;
 
 /// Public API version reported by `/status`. Bumped when shapes change.
@@ -122,6 +123,13 @@ pub(crate) fn route(
         ("GET", ["servers", id, "file"]) => file_read(app, id, query),
         ("PUT", ["servers", id, "file"]) => file_write(app, id, body),
         ("POST", ["servers", id, "files"]) => file_op(app, id, body),
+        // Cross-file search + per-file snapshots (editor history).
+        ("GET", ["servers", id, "search"]) => search(app, id, query),
+        ("GET", ["servers", id, "snapshots"]) => snapshots_list(app, id, query),
+        ("GET", ["servers", id, "snapshot"]) => snapshot_read(app, id, query),
+        ("POST", ["servers", id, "snapshots"]) => snapshot_capture(app, id, body),
+        ("POST", ["servers", id, "snapshots", "restore"]) => snapshot_restore(app, id, body),
+        ("DELETE", ["servers", id, "snapshots"]) => snapshot_delete(app, id, body),
         ("POST", ["servers", id, action])
             if matches!(*action, "start" | "stop" | "restart" | "install") =>
         {
@@ -519,6 +527,116 @@ fn plugin_validate(body: &str) -> R {
 
 fn plugin_remove(app: &AppHandle, id: &str) -> R {
     match commands::uninstall_plugin(app.clone(), id.to_string()) {
+        Ok(()) => ok_json(json!({ "ok": true })),
+        Err(e) => bad_request(&e),
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// search + snapshots
+// ──────────────────────────────────────────────────────────────────────────
+
+/// `GET /servers/:id/search?q=&mode=contents|filenames|both&include=&exclude=`
+fn search(app: &AppHandle, id: &str, query: &str) -> R {
+    let Some(q) = query_value(query, "q").filter(|value| !value.trim().is_empty()) else {
+        return bad_request("q query parameter is required");
+    };
+    let mode = query_value(query, "mode").unwrap_or_else(|| "both".to_string());
+    let include = query_value(query, "include");
+    let exclude = query_value(query, "exclude");
+    match tauri::async_runtime::block_on(commands::search_files(
+        app.clone(),
+        id.to_string(),
+        q,
+        mode,
+        include,
+        exclude,
+    )) {
+        Ok(matches) => ok_json(json!({ "matches": matches })),
+        Err(e) => bad_request(&e),
+    }
+}
+
+/// `GET /servers/:id/snapshots?path=<rel>` — edit history for one file.
+fn snapshots_list(app: &AppHandle, id: &str, query: &str) -> R {
+    let path = query_value(query, "path").unwrap_or_default();
+    match snapshots::list_file_snapshots(app.clone(), id.to_string(), path) {
+        Ok(list) => ok_json(json!({ "snapshots": list })),
+        Err(e) => bad_request(&e),
+    }
+}
+
+/// `GET /servers/:id/snapshot?path=<rel>&id=<snapshot>` — snapshot content.
+fn snapshot_read(app: &AppHandle, id: &str, query: &str) -> R {
+    let Some(path) = query_value(query, "path") else {
+        return bad_request("path query parameter is required");
+    };
+    let Some(snapshot_id) = query_value(query, "id") else {
+        return bad_request("id query parameter is required");
+    };
+    match snapshots::read_file_snapshot(app.clone(), id.to_string(), path, snapshot_id) {
+        Ok(content) => ok_json(json!({ "content": content })),
+        Err(e) => bad_request(&e),
+    }
+}
+
+/// `POST /servers/:id/snapshots` body `{ path }` — capture the current version.
+/// Returns `{ id: null }` when there is nothing new to capture.
+fn snapshot_capture(app: &AppHandle, id: &str, body: &str) -> R {
+    let parsed: Value = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(_) => return bad_request("invalid JSON body"),
+    };
+    let Some(path) = parsed.get("path").and_then(Value::as_str) else {
+        return bad_request("path is required");
+    };
+    match snapshots::snapshot_file(app.clone(), id.to_string(), path.to_string()) {
+        Ok(snapshot_id) => ok_json(json!({ "id": snapshot_id })),
+        Err(e) => bad_request(&e),
+    }
+}
+
+/// `POST /servers/:id/snapshots/restore` body `{ path, id }`.
+fn snapshot_restore(app: &AppHandle, id: &str, body: &str) -> R {
+    let parsed: Value = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(_) => return bad_request("invalid JSON body"),
+    };
+    let (Some(path), Some(snapshot_id)) = (
+        parsed.get("path").and_then(Value::as_str),
+        parsed.get("id").and_then(Value::as_str),
+    ) else {
+        return bad_request("path and id are required");
+    };
+    match snapshots::restore_file_snapshot(
+        app.clone(),
+        id.to_string(),
+        path.to_string(),
+        snapshot_id.to_string(),
+    ) {
+        Ok(()) => ok_json(json!({ "ok": true })),
+        Err(e) => bad_request(&e),
+    }
+}
+
+/// `DELETE /servers/:id/snapshots` body `{ path, id }`.
+fn snapshot_delete(app: &AppHandle, id: &str, body: &str) -> R {
+    let parsed: Value = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(_) => return bad_request("invalid JSON body"),
+    };
+    let (Some(path), Some(snapshot_id)) = (
+        parsed.get("path").and_then(Value::as_str),
+        parsed.get("id").and_then(Value::as_str),
+    ) else {
+        return bad_request("path and id are required");
+    };
+    match snapshots::delete_file_snapshot(
+        app.clone(),
+        id.to_string(),
+        path.to_string(),
+        snapshot_id.to_string(),
+    ) {
         Ok(()) => ok_json(json!({ "ok": true })),
         Err(e) => bad_request(&e),
     }

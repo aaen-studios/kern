@@ -1202,7 +1202,7 @@ fn required_scope(method: &str, seg: &[&str]) -> Scope {
                 "servers",
                 _,
                 "log" | "metrics" | "energy" | "preflight" | "crash" | "tasks" | "backups"
-                | "files" | "file",
+                | "files" | "file" | "search" | "snapshots" | "snapshot",
             ],
         ) => View,
         ("GET", ["host", "metrics"]) => View,
@@ -1218,6 +1218,9 @@ fn required_scope(method: &str, seg: &[&str]) -> Scope {
         ("DELETE", ["servers", _, "backups", _]) => Control,
         ("PUT", ["servers", _, "file"]) => Control,
         ("POST", ["servers", _, "files"]) => Control,
+        ("POST", ["servers", _, "snapshots"]) => Control,
+        ("POST", ["servers", _, "snapshots", "restore"]) => Control,
+        ("DELETE", ["servers", _, "snapshots"]) => Control,
         // Creating/removing instances, installing plugins: admin only.
         ("POST", ["servers"]) => Admin,
         ("PATCH", ["servers", _]) => Admin,
