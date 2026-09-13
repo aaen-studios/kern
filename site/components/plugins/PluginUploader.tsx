@@ -42,7 +42,18 @@ export function PluginUploader({
 
     try {
       const supabase = createClient();
-      const filePath = `${pluginId}/${version}/plugin.kern`;
+
+      // Storage RLS scopes writes to the uploader's own prefix
+      // (`<auth.uid()>/<pluginId>/<version>/plugin.kern`), so the upload must
+      // be tied to a signed-in session.
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) {
+        onError("sign in to upload a .kern file");
+        return;
+      }
+      const filePath = `${user.id}/${pluginId}/${version}/plugin.kern`;
 
       // Upload to Supabase Storage
       const { error: uploadError } = await supabase.storage
@@ -53,8 +64,7 @@ export function PluginUploader({
         });
 
       if (uploadError) {
-        onError(uploadError.message);
-        setUploading(false);
+        onError(storageErrorMessage(uploadError.message));
         return;
       }
 
@@ -150,4 +160,16 @@ async function computeSHA256(file: File): Promise<string> {
   const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
   return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * Maps raw storage errors to actionable messages. The classic failure is a
+ * missing storage RLS policy: Postgres reports `new row violates row-level
+ * security policy`, which is meaningless to a plugin author.
+ */
+function storageErrorMessage(message: string): string {
+  if (/row-level security/i.test(message)) {
+    return "upload rejected by storage policy — the server is misconfigured (run supabase/migrations/0002_storage_rls.sql). details: " + message;
+  }
+  return message;
 }

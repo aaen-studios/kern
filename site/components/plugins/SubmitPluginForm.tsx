@@ -108,7 +108,7 @@ export function SubmitPluginForm() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           version: manifest?.version ?? "1.0.0",
-          kern_compat: "0.1.0",
+          kern_compat: "0.3.0",
           storage_path: storagePath,
           sha256,
           size_bytes: sizeBytes,

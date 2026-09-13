@@ -45,18 +45,21 @@ const BUNDLE = resolve(
   bundleArg ?? join(SCRIPT_DIR, "..", "..", "kern", "release-assets", "plugins"),
 );
 
-// Tiny .env.local reader so `node scripts/...` works without extra deps.
-function loadEnvLocal() {
-  const path = resolve(SCRIPT_DIR, "..", ".env.local");
-  if (!existsSync(path)) return;
-  for (const line of readFileSync(path, "utf8").split("\n")) {
-    const match = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
-    if (!match) continue;
-    const value = match[2].replace(/^["']|["']$/g, "");
-    if (!process.env[match[1]]) process.env[match[1]] = value;
+// Minimal dotenv reader so `node scripts/...` works without extra deps.
+// Next.js precedence: `.env.local` overrides `.env`; first-set wins.
+function loadDotEnv() {
+  for (const name of [".env.local", ".env"]) {
+    const path = resolve(SCRIPT_DIR, "..", name);
+    if (!existsSync(path)) continue;
+    for (const line of readFileSync(path, "utf8").split("\n")) {
+      const match = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
+      if (!match) continue;
+      const value = match[2].replace(/^["']|["']$/g, "");
+      if (!process.env[match[1]]) process.env[match[1]] = value;
+    }
   }
 }
-loadEnvLocal();
+loadDotEnv();
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL;
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;

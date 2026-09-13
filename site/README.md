@@ -41,6 +41,11 @@ copy `.env.example` to `.env.local` and fill in the values:
 - `SUPABASE_SERVICE_ROLE_KEY` — server-side supabase access
 - `RESEND_API_KEY` — email for plugin reports
 
+then apply the database migrations: run `supabase/migration.sql` and
+`supabase/migrations/0002_storage_rls.sql` in the supabase SQL editor (or
+`supabase db push`). the storage policies are what allow plugin authors to
+upload `.kern` files from the browser.
+
 ## project structure
 
 ```

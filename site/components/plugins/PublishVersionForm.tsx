@@ -51,7 +51,7 @@ export function PublishVersionForm({ plugin }: { plugin: Plugin }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           version,
-          kern_compat: "0.1.0",
+          kern_compat: "0.3.0",
           storage_path: storagePath,
           sha256,
           size_bytes: sizeBytes,

@@ -162,6 +162,8 @@ create policy "reports_insert_public"
   with check (true);
 
 -- 6. STORAGE BUCKET for .kern files
+-- Superseded by supabase/migrations/0002_storage_rls.sql (applied via the SQL
+-- editor or `supabase db push`); kept here as the original reference.
 -- Run this in the Supabase Dashboard → Storage → Create bucket
 -- Or uncomment and run:
 -- insert into storage.buckets (id, name, public)

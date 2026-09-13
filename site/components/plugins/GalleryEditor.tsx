@@ -35,9 +35,13 @@ export function GalleryEditor({
 
     try {
       const supabase = createClient();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) throw new Error("sign in to upload screenshots");
       const ext = file.name.split(".").pop() ?? "png";
       // eslint-disable-next-line react-hooks/purity -- called from event handler only, not render
-      const filePath = `${pluginId}/screenshots/${Date.now()}.${ext}`;
+      const filePath = `${user.id}/${pluginId}/screenshots/${Date.now()}.${ext}`;
 
       const { error: uploadError } = await supabase.storage
         .from("plugin-assets")
