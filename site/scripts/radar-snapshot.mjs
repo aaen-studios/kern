@@ -25,14 +25,14 @@ const required = process.env.RADAR_SNAPSHOT_REQUIRE === "1";
 const WIDTH = 160;
 const HEIGHT = 90;
 
-async function render() {
+async function render(time) {
   const { init, effect, target } = await import("vgpu/node");
   const gpu = await init();
   const colorTarget = target(gpu, { size: [WIDTH, HEIGHT] });
   const radar = effect(gpu, shader, {
     set: {
       params: {
-        time: 1.25,
+        time,
         resolution: [WIDTH, HEIGHT],
         pointer: [0.5, 0.5],
         quality: 1,
@@ -104,7 +104,7 @@ const TOLERANCE = {
 
 let pixels;
 try {
-  pixels = await render();
+  pixels = await render(1.25);
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
   if (required) {
@@ -113,6 +113,35 @@ try {
   }
   console.warn(`radar snapshot skipped — no usable GPU: ${message}`);
   process.exit(0);
+}
+
+// animation sanity: the sweep must actually move between frames. A shader
+// that renders the same image at two different times is frozen — the exact
+// bug class behind "the sweep disappears after a moment".
+try {
+  const later = await render(1.75);
+  let same = later.length === pixels.length;
+  if (same) {
+    for (let i = 0; i < pixels.length; i++) {
+      if (pixels[i] !== later[i]) {
+        same = false;
+        break;
+      }
+    }
+  }
+  if (same) {
+    console.error(
+      "radar shader is frozen: identical pixels at time 1.25 and 1.75",
+    );
+    process.exit(1);
+  }
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (required) {
+    console.error(`radar animation check failed: ${message}`);
+    process.exit(1);
+  }
+  console.warn(`radar animation check skipped: ${message}`);
 }
 
 const current = metrics(pixels);

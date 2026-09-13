@@ -28,7 +28,9 @@ import type {
 type BackendMode = "detecting" | "webgpu" | "canvas2d";
 type Mode = BackendMode | "static";
 
-const QUALITY_FLOOR_FPS = 45;
+// the loop targets 30fps; only a genuinely struggling GPU (well under the
+// target) should drop to the low tier
+const QUALITY_FLOOR_FPS = 24;
 
 type BatteryLike = {
   level: number;
@@ -97,9 +99,12 @@ export function Radar({ onSweep, className = "", quality: forced }: RadarProps) 
     onSweepRef.current?.(angle);
   }, []);
 
-  // try WebGPU once per mount; any failure falls back to Canvas 2D
+  // try WebGPU once per mount; any failure falls back to Canvas 2D.
+  // NOTE: backendMode deliberately stays out of the deps — flipping it to
+  // "webgpu" would re-run this effect and its cleanup would dispose the
+  // handle it just created (the sweep would die after a few frames).
   useEffect(() => {
-    if (reduce || backendMode !== "detecting") return;
+    if (reduce || !hasWebGPU()) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
 
@@ -148,7 +153,7 @@ export function Radar({ onSweep, className = "", quality: forced }: RadarProps) 
       handle?.dispose();
       webgpuRef.current = null;
     };
-  }, [reduce, backendMode, emitSweep]);
+  }, [reduce, emitSweep]);
 
   // push quality changes to the live WebGPU handle
   useEffect(() => {
