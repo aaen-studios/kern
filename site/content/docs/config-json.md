@@ -36,6 +36,7 @@ kern's state lives in a single JSON document at `<app_data>/config.json`:
 | `machineWatts` | number | `120` | average draw for cost estimation |
 | `registryUrl` | string | `https://kern.aaenz.no` | plugin registry base url |
 | `webRemoteEnabled` | bool | `false` | serve the lan control panel |
+| `webRemoteBind` | string | `"0.0.0.0"` | interface the panel binds: `0.0.0.0` (all), `127.0.0.1` (localhost only — tunnel/reverse-proxy mode), or a specific ip |
 | `webRemotePort` | number | `7440` | https port for the web remote |
 | `nativeNotifications` | bool | `true` | mirror notifications to os toasts when unfocused |
 | `webhookUrl` | string | `""` | discord/slack/generic webhook |

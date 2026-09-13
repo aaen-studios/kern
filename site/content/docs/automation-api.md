@@ -91,6 +91,25 @@ Invoke-RestMethod -Uri "http://127.0.0.1:$($ep.port)/status" -Headers @{ Authori
 | `GET` | `/servers/{id}/file?path=<rel>` | `{ content, mtime }` — mtime feeds the write conflict check |
 | `PUT` | `/servers/{id}/file` | body `{ path, content, expectedMtime? }` → `{ mtime }`; when `expectedMtime` doesn't match on-disk, returns an error starting with `conflict:` |
 | `POST` | `/servers/{id}/files` | body `{ op: "mkdir" \| "delete" \| "delete_recursive" \| "rename", path, to? }` |
+| `GET` | `/servers/{id}/search?q=&mode=contents\|filenames\|both&include=&exclude=` | `{ matches: [{ relPath, lineNumber?, linePreview? }] }` |
+| `GET` | `/servers/{id}/snapshots?path=<rel>` | `{ snapshots: [{ id, at, size }] }` — per-file editor history |
+| `GET` | `/servers/{id}/snapshot?path=&id=` | `{ content }` |
+| `POST` | `/servers/{id}/snapshots` | body `{ path }` → `{ id }` (`null` when nothing changed) |
+| `POST` | `/servers/{id}/snapshots/restore` | body `{ path, id }` |
+| `DELETE` | `/servers/{id}/snapshots` | body `{ path, id }` |
+| `PUT` | `/servers/{id}/tasks` | body `{ tasks: [...] }` — replaces the instance's schedule |
+| `GET` | `/servers/{id}/backup-schedule` | `{ intervalSecs, keep, onStop, lastBackupSecs }` |
+| `PUT` | `/servers/{id}/backup-schedule` | body = the same shape |
+| `GET` | `/servers/{id}/snippets` | `["say hi", ...]` |
+| `PUT` | `/servers/{id}/snippets` | body `{ snippets: [...] }` |
+| `GET` | `/servers/{id}/rcon` | `{ host, port, hasPassword }` |
+| `GET` | `/servers/{id}/players` | `{ players, raw }` — executes RCON `list` |
+| `GET` | `/servers/{id}/log/download` | raw `latest.log` with an attachment filename |
+| `POST` | `/plugins/upload-install?name=x.kern` | raw `.kern` body — validates + installs, returns the manifest summary |
+| `GET` | `/registry/plugins?q=&category=&sort=` | marketplace listing through the host's registry client |
+| `POST` | `/registry/install` | body `{ slug, version }` → `202 { jobId }` |
+| `GET` | `/jobs/{id}` | `{ id, kind, state: running\|done\|error, message, at }` |
+| `GET` | `/audit/download` | raw audit log with an attachment filename |
 | `GET` | `/inspect?path=<dir>` | import inspection: jars, start scripts, world/eula flags, suggested runtime/name |
 
 ### plugins
