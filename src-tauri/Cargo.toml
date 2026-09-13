@@ -4,6 +4,9 @@ version = "0.5.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
+# Two binaries ship from this crate (the app + kern-cli); without this, bare
+# `cargo run` (what `tauri dev` invokes) can't choose one.
+default-run = "kern"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
