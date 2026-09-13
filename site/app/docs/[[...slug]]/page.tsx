@@ -5,6 +5,7 @@ import { getAllDocs, getDocBySlug } from "@/lib/docs";
 import { Markdown } from "@/lib/markdown";
 import { MatrixDivider } from "@/components/ui/MatrixBorder";
 import { DocToc } from "@/components/docs/DocToc";
+import { CopyPageButton } from "@/components/docs/CopyPageButton";
 
 /*
   Docs catch-all. /docs → overview; /docs/<slug> → that doc.
@@ -71,32 +72,56 @@ export default async function DocPage(props: PageProps<"/docs/[[...slug]]">) {
 
         <MatrixDivider className="my-8 opacity-50" />
 
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex gap-4">
-            {prev && (
-              <Link
-                href={`/docs/${prev.slug}`}
-                className="font-mono text-[11px] lowercase text-signal-low transition-colors hover:text-signal-high"
-              >
-                ← {prev.title}
-              </Link>
-            )}
-            {next && (
-              <Link
-                href={`/docs/${next.slug}`}
-                className="font-mono text-[11px] lowercase text-signal-low transition-colors hover:text-signal-high"
-              >
-                {next.title} →
-              </Link>
-            )}
-          </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {prev ? (
+            <Link
+              href={`/docs/${prev.slug}`}
+              transitionTypes={["nav-back"]}
+              className="group panel-flat p-4 transition-colors hover:bg-bg-surface"
+            >
+              <span className="font-mono text-[10px] lowercase text-signal-low">
+                ← prev
+              </span>
+              <span className="mt-1 block font-mono text-xs lowercase text-zinc-200 transition-colors group-hover:text-signal-high">
+                {prev.title}
+              </span>
+              <span className="mt-1 block font-mono text-[10px] leading-relaxed text-signal-low">
+                {prev.description}
+              </span>
+            </Link>
+          ) : (
+            <span aria-hidden="true" />
+          )}
+          {next && (
+            <Link
+              href={`/docs/${next.slug}`}
+              transitionTypes={["nav-forward"]}
+              className="group panel-flat p-4 text-right transition-colors hover:bg-bg-surface"
+            >
+              <span className="font-mono text-[10px] lowercase text-signal-low">
+                next →
+              </span>
+              <span className="mt-1 block font-mono text-xs lowercase text-zinc-200 transition-colors group-hover:text-signal-high">
+                {next.title}
+              </span>
+              <span className="mt-1 block font-mono text-[10px] leading-relaxed text-signal-low">
+                {next.description}
+              </span>
+            </Link>
+          )}
+        </div>
+
+        <div className="mt-6 flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-4">
+            <CopyPageButton slug={doc.slug} />
             <a
               href={`/raw/docs/${doc.slug}`}
               className="font-mono text-[11px] lowercase text-signal-low transition-colors hover:text-signal-high"
             >
               raw markdown ↗
             </a>
+          </div>
+          <div className="flex items-center gap-4">
             {doc.updated && (
               <span className="font-mono text-[11px] lowercase text-signal-low">
                 updated {doc.updated}

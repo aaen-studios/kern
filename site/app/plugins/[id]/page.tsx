@@ -86,7 +86,11 @@ export default async function PluginDetailPage(
 
       {/* breadcrumb */}
       <nav className="mb-6 font-mono text-[11px] lowercase text-signal-low">
-        <Link href="/plugins" className="hover:text-signal-high">
+        <Link
+          href="/plugins"
+          transitionTypes={["nav-back"]}
+          className="hover:text-signal-high"
+        >
           plugins
         </Link>
         <span className="mx-1">/</span>

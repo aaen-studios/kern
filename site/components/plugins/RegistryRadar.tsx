@@ -146,6 +146,36 @@ export function RegistryRadar({ plugins }: { plugins: Plugin[] }) {
 
     // Sweep angle
     const sweepAngle = t * SWEEP_SPEED;
+    const TAU = Math.PI * 2;
+
+    // Trailing sector — a phosphor-ish wedge behind the beam
+    if (!isReduced) {
+      const trail = Math.PI * 0.7;
+      const trailGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, maxR);
+      trailGrad.addColorStop(0, "rgba(76,245,160,0.10)");
+      trailGrad.addColorStop(1, "rgba(76,245,160,0)");
+      ctx.fillStyle = trailGrad;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.arc(cx, cy, maxR, sweepAngle - trail, sweepAngle, false);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // Engraved tick marks around the outer ring (every 6°)
+    for (let i = 0; i < 60; i++) {
+      const a = (i / 60) * TAU;
+      const major = i % 5 === 0;
+      ctx.strokeStyle = `rgba(76,245,160,${major ? 0.25 : 0.1})`;
+      ctx.lineWidth = 0.75;
+      ctx.beginPath();
+      ctx.moveTo(cx + Math.cos(a) * (maxR + 2), cy + Math.sin(a) * (maxR + 2));
+      ctx.lineTo(
+        cx + Math.cos(a) * (maxR + (major ? 8 : 4)),
+        cy + Math.sin(a) * (maxR + (major ? 8 : 4)),
+      );
+      ctx.stroke();
+    }
 
     // Draw blips
     for (const blip of blipsCurrent) {
@@ -158,7 +188,14 @@ export function RegistryRadar({ plugins }: { plugins: Plugin[] }) {
       while (delta > Math.PI) delta -= Math.PI * 2;
       const proximity = isReduced ? 0.6 : Math.max(0, 1 - Math.abs(delta) / 0.5);
 
-      const baseOpacity = 0.4 + 0.6 * proximity;
+      // how far behind the beam this blip sits (for the trail glow)
+      let behind = sweepAngle - blip.angle;
+      behind = ((behind % TAU) + TAU) % TAU;
+      const trailEnergy =
+        behind < Math.PI * 0.7 ? (1 - behind / (Math.PI * 0.7)) ** 2 : 0;
+
+      const baseOpacity =
+        0.2 + 0.4 * trailEnergy + 0.6 * proximity * (isReduced ? 0.4 : 1);
       const size = blip.size * (0.8 + 0.2 * proximity);
 
       // Glow for active blip

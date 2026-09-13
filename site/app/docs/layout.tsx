@@ -1,9 +1,9 @@
-import Link from "next/link";
 import type { Metadata } from "next";
 import { getDocNav, getSearchSections } from "@/lib/docs";
 import { getRelease, formatVersion } from "@/lib/github";
 import { DocSearch } from "@/components/docs/DocSearch";
 import { AgentSkillMenu } from "@/components/docs/AgentSkillMenu";
+import { DocNav } from "@/components/docs/DocNav";
 
 export const metadata: Metadata = {
   title: "docs",
@@ -36,27 +36,7 @@ export default async function DocsLayout({
               </p>
             )}
           </div>
-          <nav aria-label="docs">
-            {nav.map((group) => (
-              <div key={group.group} className="mb-5">
-                <h2 className="mb-2 font-mono text-[11px] lowercase text-signal-low">
-                  {group.group}
-                </h2>
-                <ul className="space-y-0.5">
-                  {group.docs.map((d) => (
-                    <li key={d.slug}>
-                      <Link
-                        href={`/docs/${d.slug}`}
-                        className="block px-2 py-1 font-mono text-[11px] lowercase text-zinc-300 transition-colors hover:bg-bg-surface hover:text-signal-high"
-                      >
-                        {d.title}
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))}
-          </nav>
+          <DocNav nav={nav} />
         </aside>
 
         {/* prose */}
