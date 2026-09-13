@@ -1,6 +1,6 @@
 {
   "name": "@aaen-studios/kern",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Agent skill for kern — build .kern plugins, drive kern-cli and the loopback automation API, manage backups, tasks, and the web remote.",
   "keywords": [
     "kern",
