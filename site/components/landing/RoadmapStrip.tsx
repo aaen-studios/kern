@@ -29,7 +29,7 @@ const ITEMS: Array<{
   {
     label: "web remote over cloudflare tunnel",
     status: "wave",
-    note: "drive servers from a browser tab",
+    note: "full panel: console, files, backups + quick/named tunnels",
   },
   // next
   {

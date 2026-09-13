@@ -83,10 +83,14 @@ Invoke-RestMethod -Uri "http://127.0.0.1:$($ep.port)/status" -Headers @{ Authori
 | `GET` | `/servers/{id}/crash` | `{ crash: null \| { at, exitCode, forced, tail } }` |
 | `GET` | `/servers/{id}/tasks` | `{ tasks: [...] }` |
 | `POST` | `/servers/{id}/tasks/{taskId}/run` | `{ ok: true }` |
-| `GET` | `/servers/{id}/backups` | `{ backups: [{ name, size }] }` |
+| `GET` | `/servers/{id}/backups` | `{ backups: [{ name, size, created }] }` |
 | `POST` | `/servers/{id}/backup` | `202` — snapshot now |
 | `POST` | `/servers/{id}/backups/{name}/restore` | `202` — world is snapshotted before the overwrite |
 | `DELETE` | `/servers/{id}/backups/{name}` | `{ ok: true }` |
+| `GET` | `/servers/{id}/files?path=<rel>` | `{ entries: [{ name, isDir, size, modified }] }` — `path` defaults to the instance root |
+| `GET` | `/servers/{id}/file?path=<rel>` | `{ content, mtime }` — mtime feeds the write conflict check |
+| `PUT` | `/servers/{id}/file` | body `{ path, content, expectedMtime? }` → `{ mtime }`; when `expectedMtime` doesn't match on-disk, returns an error starting with `conflict:` |
+| `POST` | `/servers/{id}/files` | body `{ op: "mkdir" \| "delete" \| "delete_recursive" \| "rename", path, to? }` |
 | `GET` | `/inspect?path=<dir>` | import inspection: jars, start scripts, world/eula flags, suggested runtime/name |
 
 ### plugins

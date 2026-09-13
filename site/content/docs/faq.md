@@ -19,7 +19,7 @@ updated: 2026-09-12
 
 **does quitting kern stop my servers?** no — they're deliberately detached and re-adopted on the next launch. use `kern-cli stop` / the stop button when you mean stop.
 
-**can i control it from my phone?** yes — the [web remote](/docs/web-remote): https + qr pairing on your lan.
+**can i control it from my phone?** yes — the [web remote](/docs/web-remote): the full panel (console, files, backups, tasks, metrics) over https, paired with one-scan invites, or published anywhere through a cloudflare tunnel.
 
 **can i script it?** yes — [`kern-cli`](/docs/cli) for shells, and the [automation api](/docs/automation-api) for anything else, both on loopback with a bearer token.
 
