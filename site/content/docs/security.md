@@ -26,7 +26,7 @@ kern runs servers on your machine, so the trust boundaries worth knowing are con
 
 ## the web remote
 
-see [web remote](/docs/web-remote). short version: https with a self-signed cert, token in the **os credential vault**, qr pairing, bound to the lan only while enabled. anyone with the token and lan access can control lifecycle — disable it when unused.
+see [web remote](/docs/web-remote). short version: https with a self-signed cert, token in the **os credential vault**, qr pairing, bound to the lan only while enabled. the optional **cloudflare tunnel** exposes it publicly at a random `*.trycloudflare.com` URL — still token-gated, but a public URL plus token is full control, so enable it deliberately and turn it off when you're done. anyone with the token and lan access can control lifecycle — disable it when unused.
 
 ## secrets
 

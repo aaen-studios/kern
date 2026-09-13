@@ -3,8 +3,8 @@ title: web remote
 group: Using kern
 slug: web-remote
 order: 11
-description: control kern from your phone over the lan — https, qr pairing.
-updated: 2026-09-12
+description: control kern from your phone — lan over https, or anywhere via cloudflare tunnel.
+updated: 2026-09-13
 ---
 
 # web remote
@@ -27,6 +27,26 @@ https://192.168.1.20:7440  ← scan the qr to pair
 ## firewall
 
 the first time the remote binds to the lan, windows firewall shows its standard "allow access" prompt. allow **private networks** only; access is token-authenticated either way. this is an os dialog, not a kern one.
+
+## public access via cloudflare tunnel
+
+need the panel from outside your network? enable **expose via cloudflare tunnel** under the web remote settings. kern runs a [cloudflared](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/) **quick tunnel** as a child process and shows the random URL:
+
+```
+https://random-words-here.trycloudflare.com
+```
+
+- no account, no port forwarding — the connector dials out to cloudflare's edge. https is terminated at the edge; the origin stays on `https://localhost:<port>` with kern's self-signed cert (`--no-tls-verify` on the connector).
+- the settings panel shows a **pairing QR for the public URL** once the tunnel is up, plus a copy button.
+- kern passes its own `--config` so a named tunnel in `~/.cloudflared/config.yml` is never touched.
+- if `cloudflared` isn't installed, the panel offers to download the official binary into kern's app data; a copy on `PATH` is used as-is.
+- the tunnel stops when you disable the toggle or quit kern.
+
+> **warn** quick tunnels are public by design. anyone with the URL *and* the token controls your servers. they're also rate-limited and have no uptime guarantee — use them for personal access, not as production infrastructure. for a stable hostname, use a named cloudflare tunnel with your own domain, or a tailscale/zerotier network.
+
+> **note** a freshly created quick tunnel can take a few minutes to resolve on some networks (negative dns caching). if the url doesn't load at first, wait and retry; the tunnel itself is already connected.
+
+> **note** `GET /` requires the token too. open the URL with `?token=…` (what the qr encodes) or send `Authorization: Bearer …`. fetching `/` bare returns `401` — that's the auth working, not a broken tunnel.
 
 ## pairing
 
