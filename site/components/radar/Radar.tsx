@@ -5,10 +5,7 @@ import { useReducedMotion } from "@/hooks/useReducedMotion";
 import { useRafLoop } from "@/hooks/useRafLoop";
 import { setupCanvasDPR } from "@/lib/canvas";
 import { createCanvas2DBackend } from "@/components/radar/Canvas2DBackend";
-import {
-  createWebGPURadar,
-  type WebGPURadarHandle,
-} from "@/components/radar/WebGPUBackend";
+import type { WebGPURadarHandle } from "@/components/radar/WebGPUBackend";
 import { RadarHUD } from "@/components/radar/RadarHUD";
 import type {
   RadarBackend,
@@ -115,21 +112,26 @@ export function Radar({ onSweep, className = "", quality: forced }: RadarProps) 
       setBackendMode("canvas2d");
     };
 
-    createWebGPURadar(canvas, {
-      quality: qualityRef.current,
-      onSweep: emitSweep,
-      onStats: ({ fps }) => {
-        if (fps < QUALITY_FLOOR_FPS && qualityRef.current === "high") {
-          setQuality("low");
-        }
-      },
-      onLost: () => {
-        if (cancelled) return;
-        handle?.dispose();
-        webgpuRef.current = null;
-        fallback2d();
-      },
-    })
+    // vgpu is lazy-loaded: browsers without WebGPU never download it, and
+    // the 2D fallback stays on the critical path.
+    import("@/components/radar/WebGPUBackend")
+      .then((mod) =>
+        mod.createWebGPURadar(canvas, {
+          quality: qualityRef.current,
+          onSweep: emitSweep,
+          onStats: ({ fps }) => {
+            if (fps < QUALITY_FLOOR_FPS && qualityRef.current === "high") {
+              setQuality("low");
+            }
+          },
+          onLost: () => {
+            if (cancelled) return;
+            handle?.dispose();
+            webgpuRef.current = null;
+            fallback2d();
+          },
+        }),
+      )
       .then((created) => {
         if (cancelled) {
           created.dispose();
