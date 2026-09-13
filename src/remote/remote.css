@@ -1,0 +1,16 @@
+/* Panel stylesheet: the desktop's design tokens + the shared component tree. */
+@import "../styles/global.css";
+
+/* Tailwind v4 scans from the Vite root (src/remote); widen it so classes used
+   by shared desktop components (editor surfaces, dialogs) are generated too. */
+@source "..";
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  overscroll-behavior-y: none;
+}

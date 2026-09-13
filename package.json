@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "remote:dev": "vite --config vite.remote.config.ts",
+    "remote:build": "vite build --config vite.remote.config.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "e2e:stop": "bun scripts/e2e-stop.mjs",
