@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServerSupabase } from "@/lib/supabase-server";
+import { revalidatePath } from "next/cache";
+import { createServerSupabase, getAuthenticatedUserId } from "@/lib/supabase-server";
 
 /**
  * GET /api/plugins — list plugins with optional filters.
@@ -103,10 +104,8 @@ export async function POST(request: NextRequest) {
     const supabase = await createServerSupabase();
 
     // Check auth
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
+    const userId = await getAuthenticatedUserId(supabase);
+    if (!userId) {
       return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
     }
 
@@ -141,7 +140,7 @@ export async function POST(request: NextRequest) {
         slug,
         display_name,
         description,
-        author_id: user.id,
+        author_id: userId,
         category,
         tags: tags ?? [],
         repo_url,
@@ -154,6 +153,10 @@ export async function POST(request: NextRequest) {
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
+
+    revalidatePath("/plugins");
+    revalidatePath("/plugins/[id]", "page");
+    revalidatePath("/plugins/publishers/[author]", "page");
 
     return NextResponse.json(data, { status: 201 });
   } catch (err) {

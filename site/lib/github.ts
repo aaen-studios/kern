@@ -214,7 +214,14 @@ export function getCliAssets(release: Release): CliAssets {
 }
 
 export function formatBytes(bytes: number): string {
-  return (bytes / 1024 / 1024).toFixed(1) + " MB";
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"] as const;
+  const i = Math.min(
+    units.length - 1,
+    Math.floor(Math.log(bytes) / Math.log(1024)),
+  );
+  const value = bytes / 1024 ** i;
+  return `${i === 0 || value >= 100 ? Math.round(value) : value.toFixed(1)} ${units[i]}`;
 }
 
 export function formatVersion(tag: string): string {

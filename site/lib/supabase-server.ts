@@ -23,8 +23,14 @@ export async function createServerSupabase() {
         return cookieStore.getAll();
       },
       setAll(cookiesToSet) {
-        for (const { name, value, options } of cookiesToSet) {
-          cookieStore.set(name, value, options);
+        try {
+          for (const { name, value, options } of cookiesToSet) {
+            cookieStore.set(name, value, options);
+          }
+        } catch {
+          // Called from a Server Component render, where cookies are
+          // read-only. The proxy refreshes and persists the session on the
+          // way in, so this can be ignored.
         }
       },
     },
@@ -32,16 +38,21 @@ export async function createServerSupabase() {
 }
 
 /**
- * Returns the currently authenticated user, or null.
- * Uses the server client so it reads session cookies automatically.
+ * Returns the authenticated user id from the request's JWT, or null.
+ *
+ * Uses `getClaims()`: the JWT signature is verified locally against the
+ * project's published keys (JWKS), so the request path doesn't pay a round
+ * trip to the Auth server. Expired tokens are refreshed through the cookie
+ * adapter, same as getUser().
  */
-export async function getCurrentUser() {
+export async function getAuthenticatedUserId(
+  supabase: Awaited<ReturnType<typeof createServerSupabase>>,
+): Promise<string | null> {
   try {
-    const supabase = await createServerSupabase();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    return user;
+    const { data, error } = await supabase.auth.getClaims();
+    if (error || !data?.claims) return null;
+    const sub = data.claims.sub;
+    return typeof sub === "string" ? sub : null;
   } catch {
     return null;
   }

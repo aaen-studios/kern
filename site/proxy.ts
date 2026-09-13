@@ -2,8 +2,13 @@ import { type NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 
 /**
- * Proxy that refreshes Supabase session cookies on every request.
- * This keeps the session alive for server components and API routes.
+ * Proxy that validates the Supabase session on every request and refreshes
+ * the auth cookies when the access token is near expiry.
+ *
+ * Uses getClaims() — the JWT signature is verified locally against the
+ * project's published keys (JWKS), so the request path doesn't pay a round
+ * trip to the Auth server. Cache headers emitted alongside refreshed cookies
+ * are applied to the response so CDNs can't cache one user's session.
  *
  * Only runs on routes that need session awareness (not static assets).
  */
@@ -16,14 +21,14 @@ export async function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
-  let response = NextResponse.next();
+  let response = NextResponse.next({ request });
 
   const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
     cookies: {
       getAll() {
         return request.cookies.getAll();
       },
-      setAll(cookiesToSet) {
+      setAll(cookiesToSet, headers) {
         for (const { name, value } of cookiesToSet) {
           request.cookies.set(name, value);
         }
@@ -31,12 +36,20 @@ export async function proxy(request: NextRequest) {
         for (const { name, value, options } of cookiesToSet) {
           response.cookies.set(name, value, options);
         }
+        for (const [key, value] of Object.entries(headers)) {
+          response.headers.set(key, value);
+        }
       },
     },
   });
 
-  // Refresh session — this also sets/refreshes the cookie
-  await supabase.auth.getUser();
+  // Verify the JWT locally; refreshes the session when the token is expiring.
+  // Failures are non-fatal: protected routes re-check auth themselves.
+  try {
+    await supabase.auth.getClaims();
+  } catch (err) {
+    console.warn("proxy: getClaims failed", err);
+  }
 
   return response;
 }

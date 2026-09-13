@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { SubmitPluginForm } from "@/components/plugins/SubmitPluginForm";
 import { SignInGate } from "@/components/auth/SignInGate";
-import { createServerSupabase } from "@/lib/supabase-server";
+import { createServerSupabase, getAuthenticatedUserId } from "@/lib/supabase-server";
 
 export const metadata: Metadata = {
   title: "submit a plugin",
@@ -22,9 +22,7 @@ export default async function SubmitPluginPage() {
 
   // Check auth
   const supabase = await createServerSupabase();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const userId = await getAuthenticatedUserId(supabase);
 
   return (
     <main className="mx-auto max-w-[1080px] px-4 pb-24 pt-28 sm:px-6">
@@ -41,7 +39,7 @@ export default async function SubmitPluginPage() {
         </p>
       </header>
 
-      {user ? (
+      {userId ? (
         <SubmitPluginForm />
       ) : (
         <SignInGate message="sign in with github to publish plugins to the registry." />

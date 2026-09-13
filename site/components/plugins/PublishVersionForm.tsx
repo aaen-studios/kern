@@ -4,6 +4,8 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { PluginUploader } from "./PluginUploader";
 import type { Plugin } from "@/lib/registry";
+import { formatBytes } from "@/lib/github";
+import { responseError } from "@/lib/http";
 
 export function PublishVersionForm({ plugin }: { plugin: Plugin }) {
   const router = useRouter();
@@ -60,8 +62,7 @@ export function PublishVersionForm({ plugin }: { plugin: Plugin }) {
       });
 
       if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error ?? "failed to publish version");
+        throw new Error(await responseError(res, "failed to publish version"));
       }
 
       setSuccess(`version ${version} published!`);
@@ -133,7 +134,8 @@ export function PublishVersionForm({ plugin }: { plugin: Plugin }) {
           )}
           {uploaded && (
             <p className="font-mono text-[10px] text-signal-high">
-              file uploaded · sha256: {sha256.slice(0, 16)}…
+              file uploaded · {formatBytes(sizeBytes)} · sha256:{" "}
+              {sha256.slice(0, 16)}…
             </p>
           )}
         </div>

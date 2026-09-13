@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServerSupabase } from "@/lib/supabase-server";
+import { revalidatePath } from "next/cache";
+import { createServerSupabase, getAuthenticatedUserId } from "@/lib/supabase-server";
 
 type RouteParams = { params: Promise<{ id: string }> };
 
@@ -67,15 +68,25 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
  * PUT /api/plugins/:id — update plugin metadata (owner only).
  */
 export async function PUT(request: NextRequest, { params }: RouteParams) {
+  const startedAt = Date.now();
+  let phaseAt = startedAt;
+  // TEMP: phase timings to chase the 504 on save. Remove once stable.
+  const phase = (label: string) => {
+    const now = Date.now();
+    console.log(
+      `PUT /api/plugins/[id] ${label} +${now - phaseAt}ms (total ${now - startedAt}ms)`,
+    );
+    phaseAt = now;
+  };
+
   try {
     const { id } = await params;
     const supabase = await createServerSupabase();
 
     // Check auth
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
+    const userId = await getAuthenticatedUserId(supabase);
+    phase("auth");
+    if (!userId) {
       return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
     }
 
@@ -98,9 +109,10 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
     if (!plugin) {
       return NextResponse.json({ error: "Plugin not found" }, { status: 404 });
     }
-    if (plugin.author_id !== user.id) {
+    if (plugin.author_id !== userId) {
       return NextResponse.json({ error: "Not authorized" }, { status: 403 });
     }
+    phase("lookup");
 
     const pluginUuid = plugin.id;
 
@@ -136,10 +148,15 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
       .eq("id", pluginUuid)
       .select()
       .single();
+    phase("update");
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
+
+    revalidatePath("/plugins");
+    revalidatePath("/plugins/[id]", "page");
+    revalidatePath("/plugins/publishers/[author]", "page");
 
     return NextResponse.json(data);
   } catch (err) {
@@ -160,10 +177,8 @@ export async function DELETE(_request: NextRequest, { params }: RouteParams) {
     const supabase = await createServerSupabase();
 
     // Check auth
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
+    const userId = await getAuthenticatedUserId(supabase);
+    if (!userId) {
       return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
     }
 
@@ -186,7 +201,7 @@ export async function DELETE(_request: NextRequest, { params }: RouteParams) {
     if (!plugin) {
       return NextResponse.json({ error: "Plugin not found" }, { status: 404 });
     }
-    if (plugin.author_id !== user.id) {
+    if (plugin.author_id !== userId) {
       return NextResponse.json({ error: "Not authorized" }, { status: 403 });
     }
 
@@ -199,6 +214,10 @@ export async function DELETE(_request: NextRequest, { params }: RouteParams) {
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
+
+    revalidatePath("/plugins");
+    revalidatePath("/plugins/[id]", "page");
+    revalidatePath("/plugins/publishers/[author]", "page");
 
     return NextResponse.json({ success: true });
   } catch (err) {

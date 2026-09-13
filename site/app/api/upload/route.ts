@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServerSupabase } from "@/lib/supabase-server";
+import { createServerSupabase, getAuthenticatedUserId } from "@/lib/supabase-server";
 
 /**
  * POST /api/upload — generate a presigned upload URL for a .kern file.
@@ -17,10 +17,8 @@ export async function POST(request: NextRequest) {
     const supabase = await createServerSupabase();
 
     // Check auth
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
+    const userId = await getAuthenticatedUserId(supabase);
+    if (!userId) {
       return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
     }
 
@@ -44,7 +42,7 @@ export async function POST(request: NextRequest) {
     if (!plugin) {
       return NextResponse.json({ error: "Plugin not found" }, { status: 404 });
     }
-    if (plugin.author_id !== user.id) {
+    if (plugin.author_id !== userId) {
       return NextResponse.json({ error: "Not authorized" }, { status: 403 });
     }
 

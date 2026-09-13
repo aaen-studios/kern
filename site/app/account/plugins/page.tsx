@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { MyPluginTable } from "@/components/plugins/MyPluginTable";
 import { SignInGate } from "@/components/auth/SignInGate";
-import { createServerSupabase } from "@/lib/supabase-server";
+import { createServerSupabase, getAuthenticatedUserId } from "@/lib/supabase-server";
 
 export const metadata: Metadata = {
   title: "my plugins",
@@ -10,9 +10,7 @@ export const metadata: Metadata = {
 
 export default async function MyPluginsPage() {
   const supabase = await createServerSupabase();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const userId = await getAuthenticatedUserId(supabase);
 
   return (
     <main className="mx-auto max-w-[1080px] px-4 pb-24 pt-28 sm:px-6">
@@ -28,7 +26,7 @@ export default async function MyPluginsPage() {
         </p>
       </header>
 
-      {user ? (
+      {userId ? (
         <MyPluginTable />
       ) : (
         <SignInGate message="sign in with github to manage your plugins." />

@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { PluginVersion } from "@/lib/registry";
 import { formatRelativeTime } from "@/lib/registry";
 import { formatBytes } from "@/lib/github";
+import { responseError } from "@/lib/http";
 
 /*
   Editable version table. Each row has an inline changelog input and a
@@ -21,6 +22,7 @@ export function VersionRowEditor({
 }) {
   const [deleting, setDeleting] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [error, setError] = useState("");
 
   const sorted = [...versions].sort((a, b) => b.created_at - a.created_at);
 
@@ -38,13 +40,13 @@ export function VersionRowEditor({
         { method: "DELETE" },
       );
       if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error ?? "failed to delete version");
+        throw new Error(await responseError(res, "failed to delete version"));
       }
       onVersionsChange(versions.filter((v) => v.version !== version));
       setConfirmDelete(null);
+      setError("");
     } catch (err) {
-      console.error("delete version error:", err);
+      setError(err instanceof Error ? err.message : "failed to delete version");
     } finally {
       setDeleting(null);
     }
@@ -60,6 +62,11 @@ export function VersionRowEditor({
 
   return (
     <div className="overflow-x-auto">
+      {error && (
+        <p className="mb-3 font-mono text-[11px] lowercase text-fault-vector">
+          {error}
+        </p>
+      )}
       <table className="w-full border-collapse">
         <thead>
           <tr className="border-b border-grid-bounds/60 text-left">

@@ -6,6 +6,7 @@ import { createClient } from "@/lib/supabase";
 import { ALL_CATEGORIES, type Category } from "@/lib/registry";
 import { PluginUploader } from "./PluginUploader";
 import type { KernManifest } from "@/lib/kern";
+import { responseError } from "@/lib/http";
 
 type Step = "upload" | "metadata" | "confirm";
 
@@ -96,8 +97,7 @@ export function SubmitPluginForm() {
       });
 
       if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error ?? "failed to create plugin");
+        throw new Error(await responseError(res, "failed to create plugin"));
       }
 
       const plugin = await res.json();
@@ -117,8 +117,7 @@ export function SubmitPluginForm() {
       });
 
       if (!versionRes.ok) {
-        const data = await versionRes.json();
-        throw new Error(data.error ?? "failed to create version");
+        throw new Error(await responseError(versionRes, "failed to create version"));
       }
 
       // Redirect to the new plugin page

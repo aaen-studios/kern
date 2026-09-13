@@ -14,6 +14,7 @@ import {
   formatRelativeTime,
 } from "@/lib/registry";
 import { Markdown } from "@/lib/markdown";
+import { responseError } from "@/lib/http";
 import { Badge, VerifiedBadge } from "@/components/ui/Badge";
 import { MatrixDivider } from "@/components/ui/MatrixBorder";
 import { SectionHeading } from "@/components/ui/Reveal";
@@ -107,8 +108,7 @@ export function EditPluginPageClient({
       });
 
       if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error ?? "failed to save");
+        throw new Error(await responseError(res, "failed to save"));
       }
 
       setDirty(false);

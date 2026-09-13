@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { getPlugin } from "@/lib/registry";
 import { EditPluginPageClient } from "@/components/plugins/EditPluginPageClient";
 import { SignInGate } from "@/components/auth/SignInGate";
-import { createServerSupabase } from "@/lib/supabase-server";
+import { createServerSupabase, getAuthenticatedUserId } from "@/lib/supabase-server";
 
 type Props = {
   params: Promise<{ id: string }>;
@@ -25,20 +25,18 @@ export default async function EditPluginPage({ params }: Props) {
 
   // Check auth and ownership
   const supabase = await createServerSupabase();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const userId = await getAuthenticatedUserId(supabase);
 
   // Determine what to show
   let body: React.ReactNode;
 
-  if (!user) {
+  if (!userId) {
     body = <SignInGate message="sign in with github to edit your plugins." />;
   } else {
     const { data: profile } = await supabase
       .from("profiles")
       .select("github_user")
-      .eq("id", user.id)
+      .eq("id", userId)
       .single();
 
     const author = plugin.author_github ?? plugin.author;
