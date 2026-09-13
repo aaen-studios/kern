@@ -28,4 +28,13 @@ export interface RadarProps {
   /** receives the current sweep angle (radians) each frame */
   onSweep?: (angle: number) => void;
   className?: string;
+  /** force a quality tier; "auto" (default) adapts to the device */
+  quality?: RadarQuality;
+}
+
+export type RadarQuality = "high" | "low";
+
+export interface RadarStats {
+  fps: number;
+  frameCount: number;
 }

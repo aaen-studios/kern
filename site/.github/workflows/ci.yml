@@ -37,3 +37,21 @@ jobs:
           # build degrades gracefully without secrets (seed registry,
           # release fetch returns null) — keep CI secretless.
           NEXT_TELEMETRY_DISABLED: "1"
+
+  radar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: validate radar shader
+        run: npx vgpu check lib/radar/radar.wgsl
+
+      - name: radar snapshot
+        run: npm run radar:snapshot

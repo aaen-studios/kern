@@ -5,6 +5,14 @@ const nextConfig: NextConfig = {
   // parent-dir lockfile. Keeps the build quiet; no other config needed.
   turbopack: {
     root: __dirname,
+    // vgpu shaders are authored as .wgsl modules; the loader resolves the
+    // import graph at build time and hands effect() one finished shader.
+    rules: {
+      "*.wgsl": {
+        loaders: ["@vgpu/wgsl/loader-webpack"],
+        as: "*.js",
+      },
+    },
   },
   // Baseline hardening; HSTS is added by the platform (Vercel).
   async headers() {
