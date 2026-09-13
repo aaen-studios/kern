@@ -1,12 +1,19 @@
 {
   "id": "discord_bot",
   "displayName": "Discord Bot Manager",
-  "description": "Create and manage Discord bots with multiple runtime support (Node.js, Bun, Deno, Rust). Configure tokens, set up event handlers, and deploy your bot with zero-config scaffolding.",
-  "version": "1.2.0",
-  "author": "kern/sample",
+  "description": "Create and manage Discord bots with multiple runtime support (Node.js, Bun, Deno, Rust). Store the bot token in the OS credential vault, scaffold runtime-specific starter files, and watch the bot's console live.",
+  "version": "1.3.0",
+  "author": "ellipog",
   "uiEntry": "dist/index.js",
-  "kernCompat": "0.2.0",
-  "permissions": [],
+  "kernCompat": "0.3.0",
+  "permissions": [
+    "servers:read",
+    "files:read",
+    "files:write",
+    "process",
+    "metrics",
+    "plugin:secrets"
+  ],
   "stopCommand": "",
   "configSchema": [
     {
@@ -44,8 +51,20 @@
     }
   ],
   "lifecycle": {
-    "install": {
-      "command": "{{userOverrides.runtime}}",
+    "install.node": {
+      "command": "npm",
+      "args": [
+        "install"
+      ]
+    },
+    "install.bun": {
+      "command": "bun",
+      "args": [
+        "install"
+      ]
+    },
+    "install.deno": {
+      "command": "deno",
       "args": [
         "install"
       ]
@@ -73,6 +92,10 @@
     {
       "id": "dbot-status",
       "label": "Status"
+    },
+    {
+      "id": "dbot-setup",
+      "label": "Setup"
     }
   ],
   "scaffold": {
@@ -116,7 +139,7 @@
           "bun"
         ]
       },
-      "content": "// Discord bot entry — read your token from the environment.\n// The kern host streams this process's stdout/stderr to latest.log.\nconst token = process.env.{{userOverrides.token_env}};\nif (!token) {\n  console.error(`missing {{{userOverrides.token_env}}} environment variable`);\n  process.exit(1);\n}\nconsole.log(\"discord bot starting…\");\n// TODO: connect your client here.\n"
+      "content": "// Discord bot entry — the token arrives via the environment.\n// Use the plugin's Setup tab to store it: kern keeps it in the OS\n// credential vault and writes .env, which the host injects at launch.\nconst token = process.env.{{userOverrides.token_env}};\nif (!token) {\n  console.error(\"missing {{userOverrides.token_env}} — save the token in the plugin's Setup tab\");\n  process.exit(1);\n}\nconsole.log(\"discord bot starting…\");\n// TODO: connect your client here.\n"
     },
     "index_ts": {
       "path": "index.ts",
@@ -126,7 +149,7 @@
           "deno"
         ]
       },
-      "content": "// Deno Discord bot entry.\nconst token = Deno.env.get(\"{{userOverrides.token_env}}\");\nif (!token) {\n  console.error(`missing {{{userOverrides.token_env}}} environment variable`);\n  Deno.exit(1);\n}\nconsole.log(\"discord bot starting…\");\n"
+      "content": "// Deno Discord bot entry.\nconst token = Deno.env.get(\"{{userOverrides.token_env}}\");\nif (!token) {\n  console.error(\"missing {{userOverrides.token_env}} — save the token in the plugin's Setup tab\");\n  Deno.exit(1);\n}\nconsole.log(\"discord bot starting…\");\n"
     },
     "main_rs": {
       "path": "src/main.rs",
@@ -136,7 +159,15 @@
           "rust"
         ]
       },
-      "content": "use serenity::prelude::*;\n\n#[tokio::main]\nasync fn main() {\n    // Read the bot token from the DISCORD_TOKEN env var. Set it in a .env\n    // file in this folder (the kern host injects .env into the process).\n    let token = std::env::var(\"DISCORD_TOKEN\").expect(\"missing DISCORD_TOKEN env var — add it to .env\");\n    println!(\"discord bot starting…\");\n    // TODO: build and start your serenity client here.\n    let _ = token;\n}\n"
+      "content": "use serenity::prelude::*;\n\n#[tokio::main]\nasync fn main() {\n    // The token arrives via .env (written by the plugin's Setup tab and\n    // injected into this process by the kern host).\n    let token = std::env::var(\"{{userOverrides.token_env}}\")\n        .expect(\"missing token — save it in the plugin's Setup tab\");\n    println!(\"discord bot starting…\");\n    // TODO: build and start your serenity client here.\n    let _ = token;\n}\n"
+    },
+    "env_example": {
+      "path": ".env.example",
+      "content": "# copy to .env or let the plugin's Setup tab write it\n{{userOverrides.token_env}}=\n"
+    },
+    "gitignore": {
+      "path": ".gitignore",
+      "content": "# secrets and runtime artifacts\n.env\nnode_modules/\ntarget/\n"
     }
   }
 }
