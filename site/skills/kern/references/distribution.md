@@ -14,7 +14,7 @@ submission is a **pull request** to the `kern-registry` github repo. a github ac
 4. uploads the blob to r2,
 5. upserts a row in the d1 catalog.
 
-curation = maintainers review the pr. official plugins (`kern/official`, `kern/sample`) get a `verified` badge. this path needs zero auth infra and gives an instant trust signal.
+curation = maintainers review the pr. plugins published by the official `ellipog` account get a `verified` badge. this path needs zero auth infra and gives an instant trust signal.
 
 ## phase b — open self-publish
 

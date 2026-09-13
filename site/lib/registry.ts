@@ -441,11 +441,7 @@ export async function getAuthors(): Promise<string[]> {
 // ── Helpers ──────────────────────────────────────────────────────
 
 export function isOfficial(author: string): boolean {
-  return (
-    author === "kern/official" ||
-    author === "kern/sample" ||
-    author === "ellipog"
-  );
+  return author === "ellipog";
 }
 
 export function avgRating(p: Plugin): number {

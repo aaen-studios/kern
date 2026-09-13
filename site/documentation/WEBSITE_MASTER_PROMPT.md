@@ -75,11 +75,12 @@ an **isolated Shadow DOM** so plugin styles never bleed. This is the heart of th
 the website (see §5–7).
 
 ### 1.4 First-party sample plugins (use as social proof)
-- **Minecraft Java Server** (`minecraft_java`, v1.2.0, author `kern/sample`) — supports **7 server softwares**:
+- **Minecraft Java Server** (`minecraft_java`, v1.3.0, author `ellipog`) — supports **7 server softwares**:
   vanilla, paper, purpur, fabric, forge, neoforge, quilt. Auto-downloads the correct JAR/installer, accepts EULA,
-  edits `server.properties`, manages whitelist/ops/bans, and backs up worlds. Adds "Setup" and "Chat" tabs.
-- **Discord Bot Manager** (`discord_bot`, v1.2.0, author `kern/sample`) — supports **4 runtimes**: Node.js, Bun,
-  Deno, Rust. Runtime-conditional scaffolding generates the right starter files.
+  edits `server.properties`, manages whitelist/ops/bans, and backs up worlds. Adds "Setup", "Chat" and "Manage" tabs.
+- **Discord Bot Manager** (`discord_bot`, v1.3.0, author `ellipog`) — supports **4 runtimes**: Node.js, Bun,
+  Deno, Rust. Runtime-conditional scaffolding generates the right starter files; the bot token lives in the OS
+  credential vault and the console streams live while the bot runs.
 
 ### 1.5 Target audience
 Self-hosters and hobbyists running their own game servers (especially Minecraft), Discord/automation bots, and
@@ -362,8 +363,8 @@ A `.kern` file is a **zip archive** containing:
 {
   "id": "minecraft_java",            // unique, lowercase, underscores — the registry key
   "displayName": "Minecraft Java Server",
-  "version": "1.2.0",                // semver
-  "author": "kern/sample",           // or a GitHub handle
+  "version": "1.3.0",                // semver
+  "author": "ellipog",               // a GitHub handle; the official account is `ellipog`
   "description": "Run and manage Minecraft Java Edition servers…",
   "uiEntry": "dist/index.js",        // ESM bundle exposing mount(hostApi)
 
@@ -455,7 +456,7 @@ CREATE TABLE plugins (
   id            TEXT PRIMARY KEY,          -- manifest id, e.g. minecraft_java
   display_name  TEXT NOT NULL,
   description   TEXT,
-  author        TEXT NOT NULL,             -- GitHub login or 'kern/official'
+  author        TEXT NOT NULL,             -- GitHub login (official plugins: 'ellipog')
   author_github_id   INTEGER,              -- verified publisher (NULL = curated/unknown)
   category      TEXT,                      -- 'game-server' | 'bot' | 'web' | 'database' | 'dev-tool' | 'other'
   tags          TEXT,                      -- JSON array: ["minecraft","java","paper",…]
@@ -527,7 +528,7 @@ swallows the navigation, and lets you swap blob URLs without editing every butto
 - Leave a `kern_compat` column so a plugin can declare the minimum host version; surface incompatibility warnings in the browser.
 
 ### 6.7 Moderation & curation policy
-- **Phase A:** maintainer review on PR. Official plugins (`kern/official`, `kern/sample`) get a `verified` badge.
+- **Phase A:** maintainer review on PR. Plugins published by the official `ellipog` account get a `verified` badge.
 - **Phase B:** reports via GitHub Issues against `kern-registry`; soft-delete (`featured=0`, hidden flag) for takedowns.
 - Every detail page shows: author, GitHub link, version history, install count, ratings, and a "report" link.
 - Prominent but unobtrusive notice: *"kern plugins run with full local privileges. Install only from authors you trust."*

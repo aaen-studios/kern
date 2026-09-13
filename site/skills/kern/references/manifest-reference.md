@@ -13,7 +13,7 @@ the manifest declares metadata, a dynamic config form, lifecycle commands, start
   "id": "web_api",
   "displayName": "Web API Server",
   "version": "1.0.0",
-  "author": "kern/official",
+  "author": "ellipog",
   "description": "Run a Node.js/Express web API with env-based config, health checks, and pm2 or nodemon for hot reload.",
   "uiEntry": "dist/index.js",
 
@@ -44,7 +44,7 @@ the manifest declares metadata, a dynamic config form, lifecycle commands, start
 | `id` | string | yes | unique, lowercase, underscores. the registry key. |
 | `displayName` | string | yes | human name. |
 | `version` | string | yes | semver. |
-| `author` | string | yes | `kern/sample`, `kern/official`, or a github handle. |
+| `author` | string | yes | a github handle. the official plugins are published by `ellipog`. |
 | `description` | string | yes | one-liner for cards/detail. |
 | `uiEntry` | path | no | `dist/index.js` — the esm bundle exposing `mount(hostApi)`. |
 | `configSchema` | field[] | no | the dynamic config form (see `config-schema`). |
