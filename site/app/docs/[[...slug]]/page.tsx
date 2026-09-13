@@ -31,6 +31,11 @@ export async function generateMetadata(
   return {
     title: doc.title,
     description: doc.description,
+    openGraph: {
+      title: doc.title,
+      description: doc.description,
+      images: [{ url: `/docs/og?slug=${doc.slug}`, width: 1200, height: 630 }],
+    },
   };
 }
 
@@ -86,6 +91,12 @@ export default async function DocPage(props: PageProps<"/docs/[[...slug]]">) {
             )}
           </div>
           <div className="flex items-center gap-4">
+            <a
+              href={`/raw/docs/${doc.slug}`}
+              className="font-mono text-[11px] lowercase text-signal-low transition-colors hover:text-signal-high"
+            >
+              raw markdown ↗
+            </a>
             {doc.updated && (
               <span className="font-mono text-[11px] lowercase text-signal-low">
                 updated {doc.updated}

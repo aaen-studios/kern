@@ -22,7 +22,8 @@ type InlineToken =
   | { t: "code"; v: string }
   | { t: "bold"; v: string }
   | { t: "italic"; v: string }
-  | { t: "link"; v: string; href: string };
+  | { t: "link"; v: string; href: string }
+  | { t: "image"; v: string; href: string };
 
 // parse a single line into inline tokens
 function parseInline(line: string): InlineToken[] {
@@ -64,6 +65,14 @@ function parseInline(line: string): InlineToken[] {
       i += italic[0].length;
       continue;
     }
+    // ![alt](src)
+    const image = rest.match(/^!\[([^\]]*)\]\(([^)\s]+)\)/);
+    if (image) {
+      pushText();
+      tokens.push({ t: "image", v: image[1], href: image[2] });
+      i += image[0].length;
+      continue;
+    }
     // [text](url)
     const link = rest.match(/^\[([^\]]+)\]\(([^)\s]+)\)/);
     if (link) {
@@ -103,6 +112,17 @@ function renderInline(tokens: InlineToken[]): ReactNode[] {
           <em key={idx} className="italic text-zinc-200">
             {tk.v}
           </em>
+        );
+      case "image":
+        return (
+          // eslint-disable-next-line @next/next/no-img-element -- docs images may live on any host
+          <img
+            key={idx}
+            src={tk.href}
+            alt={tk.v}
+            loading="lazy"
+            className="my-2 max-w-full ring-1 ring-grid-bounds"
+          />
         );
       case "link":
         return (

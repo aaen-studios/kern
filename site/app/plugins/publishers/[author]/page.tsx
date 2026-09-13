@@ -52,6 +52,7 @@ export default async function PublisherPage(
       <header className="mb-10">
         <div className="flex items-center gap-3">
           {avatar && (
+            // eslint-disable-next-line @next/next/no-img-element -- remote oauth avatar, unknown host
             <img
               src={avatar}
               alt=""

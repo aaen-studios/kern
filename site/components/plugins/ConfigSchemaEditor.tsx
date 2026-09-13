@@ -1,6 +1,6 @@
 "use client";
 
-import type { ConfigField, Category } from "@/lib/registry";
+import type { ConfigField } from "@/lib/registry";
 
 /*
   Inline editor for a plugin's config_schema array.

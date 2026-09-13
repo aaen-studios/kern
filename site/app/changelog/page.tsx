@@ -7,6 +7,9 @@ export const metadata: Metadata = {
   title: "changelog",
   description:
     "release history for kern — every version, pulled live from github releases.",
+  alternates: {
+    types: { "application/atom+xml": "/changelog/feed.xml" },
+  },
 };
 
 // §9.1 — server component seeds the first 5 releases at build time; the client
@@ -31,7 +34,12 @@ export default async function ChangelogPage() {
           >
             aaen-studios/kern
           </a>
-          . scroll to load more.
+          . scroll to load more · <a
+            href="/changelog/feed.xml"
+            className="text-signal-high underline underline-offset-2"
+          >
+            rss
+          </a>
         </p>
       </header>
 

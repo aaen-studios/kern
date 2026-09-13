@@ -24,6 +24,9 @@ export function GET() {
     "> Register any project folder as a managed server instance, control its lifecycle,",
     "> stream logs and telemetry, and extend it with plugins. Includes a command line",
     "> (`kern-cli`), a loopback automation API, and an optional LAN web remote.",
+    ">",
+    "> these docs are also packaged as an agent skill: run `npx skills add ellipog/kern-web`",
+    "> (or `npm i -D @aaen-studios/kern`). full text in one response: /llms-full.txt",
     "",
     "## docs",
   ];

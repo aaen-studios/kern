@@ -18,6 +18,7 @@ const NAV_LINKS = [
 export function StickyNav() {
   // Fades in opacity as you scroll (tied to scrollY).
   const [scrolled, setScrolled] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
   const { user, loading } = useAuth();
 
   useEffect(() => {
@@ -58,6 +59,15 @@ export function StickyNav() {
           </ul>
           {!loading && (user ? <UserMenu /> : <SignInButton />)}
           <SoundToggle />
+          <button
+            type="button"
+            onClick={() => setMobileOpen((v) => !v)}
+            aria-expanded={mobileOpen}
+            aria-controls="mobile-nav"
+            className="font-mono text-xs lowercase text-signal-low transition-colors hover:text-signal-high sm:hidden"
+          >
+            {mobileOpen ? "close" : "menu"}
+          </button>
           <Link
             href="/#download"
             className="inline-flex items-center bg-signal-high px-3 py-1.5 font-mono text-xs lowercase text-bg-core transition hover:brightness-110"
@@ -66,6 +76,27 @@ export function StickyNav() {
           </Link>
         </div>
       </nav>
+
+      {mobileOpen && (
+        <div
+          id="mobile-nav"
+          className="border-t border-grid-bounds/60 bg-bg-core/95 backdrop-blur-sm sm:hidden"
+        >
+          <ul className="mx-auto flex max-w-[1080px] flex-col px-4 py-2 sm:px-6">
+            {NAV_LINKS.map((l) => (
+              <li key={l.href}>
+                <Link
+                  href={l.href}
+                  onClick={() => setMobileOpen(false)}
+                  className="block px-1 py-2.5 font-mono text-xs lowercase text-signal-low transition-colors hover:text-signal-high"
+                >
+                  {l.label}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </header>
   );
 }

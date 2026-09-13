@@ -58,7 +58,20 @@ export default async function PluginDetailPage(
       name: plugin.author_github ?? plugin.author,
     },
     softwareVersion: v.version,
+    url: `https://kern.aaenz.no/plugins/${plugin.id}`,
+    downloadUrl: v.download_url,
     offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+    ...(plugin.rating_count > 0
+      ? {
+          aggregateRating: {
+            "@type": "AggregateRating",
+            ratingValue: (plugin.rating_sum / plugin.rating_count).toFixed(1),
+            ratingCount: plugin.rating_count,
+            bestRating: 5,
+            worstRating: 1,
+          },
+        }
+      : {}),
   };
 
   return (
@@ -140,6 +153,7 @@ export default async function PluginDetailPage(
                   key={i}
                   className="aspect-video overflow-hidden bg-bg-core ring-1 ring-grid-bounds"
                 >
+                  {/* eslint-disable-next-line @next/next/no-img-element -- plugin screenshots are arbitrary remote/user hosts */}
                   <img
                     src={s.url}
                     alt={s.alt ?? `${plugin.display_name} screenshot ${i + 1}`}

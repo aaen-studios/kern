@@ -29,6 +29,7 @@ export function UserMenu() {
         aria-label={`${username} menu`}
       >
         {avatarUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element -- remote oauth avatar, unknown host
           <img
             src={avatarUrl}
             alt=""

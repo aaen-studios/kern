@@ -90,6 +90,7 @@ export function GalleryEditor({
           {slot ? (
             // Filled slot
             <>
+              {/* eslint-disable-next-line @next/next/no-img-element -- plugin screenshots are arbitrary remote/user hosts */}
               <img
                 src={slot.url}
                 alt={slot.alt ?? ""}

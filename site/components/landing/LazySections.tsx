@@ -18,6 +18,10 @@ const TerminalMock = dynamic(
   () => import("@/components/landing/TerminalMock").then((m) => m.TerminalMock),
   { ssr: false },
 );
+const ReactorMock = dynamic(
+  () => import("@/components/landing/ReactorMock").then((m) => m.ReactorMock),
+  { ssr: false },
+);
 const LifecycleMock = dynamic(
   () => import("@/components/landing/LifecycleMock").then((m) => m.LifecycleMock),
   { ssr: false },
@@ -45,6 +49,17 @@ const MiniChangelog = dynamic(
   () => import("@/components/landing/MiniChangelog").then((m) => m.MiniChangelog),
   { ssr: false },
 );
+const AutoUpdateSection = dynamic(
+  () =>
+    import("@/components/landing/AutoUpdateSection").then(
+      (m) => m.AutoUpdateSection,
+    ),
+  { ssr: false },
+);
+const RoadmapStrip = dynamic(
+  () => import("@/components/landing/RoadmapStrip").then((m) => m.RoadmapStrip),
+  { ssr: false },
+);
 
 function SectionFallback({ height = "h-96" }: { height?: string }) {
   return <div className={`w-full ${height}`} aria-hidden="true" />;
@@ -64,6 +79,10 @@ export function LazySections({
       </Suspense>
       <ScanDivider />
       <Suspense fallback={<SectionFallback height="h-[400px]" />}>
+        <ReactorMock />
+      </Suspense>
+      <ScanDivider />
+      <Suspense fallback={<SectionFallback height="h-[400px]" />}>
         <LifecycleMock />
       </Suspense>
       <ScanDivider />
@@ -77,6 +96,14 @@ export function LazySections({
       <ScanDivider />
       <Suspense fallback={<SectionFallback height="h-[400px]" />}>
         <AgentSkillSection />
+      </Suspense>
+      <ScanDivider />
+      <Suspense fallback={<SectionFallback height="h-[300px]" />}>
+        <AutoUpdateSection />
+      </Suspense>
+      <ScanDivider />
+      <Suspense fallback={<SectionFallback height="h-[400px]" />}>
+        <RoadmapStrip />
       </Suspense>
 
       <section className="mx-auto max-w-[1080px] px-4 py-12 sm:px-6">

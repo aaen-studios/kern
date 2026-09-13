@@ -172,6 +172,7 @@ export function TerminalMock() {
         await delayedAppend("  help                        — show this", "info", 80);
         await delayedAppend("  clear                       — clear terminal", "info", 80);
         await delayedAppend("  kern list                   — list running servers", "info", 80);
+        await delayedAppend("  kern status                 — show every server and its state", "info", 80);
         await delayedAppend("  kern install <name>          — install a server type", "info", 80);
         await delayedAppend("  kern start <name>            — start a server", "info", 80);
         await delayedAppend("  kern stop <name>             — stop a server", "info", 80);
@@ -253,8 +254,10 @@ export function TerminalMock() {
         await delayedAppend("server status:", "dim", 100);
         for (const s of SERVERS) {
           const state = states[s.id];
+          const dot =
+            state === "running" ? "🟢" : state === "offline" ? "⚪" : "🟡";
           await delayedAppend(
-            `  ${s.id} · ${s.runtime} · ${state === "offline" ? "🟢" : "🟢"} ${state}`,
+            `  ${s.id} · ${s.runtime} · ${dot} ${state}`,
             state === "running" ? "success" : "dim",
             120,
           );

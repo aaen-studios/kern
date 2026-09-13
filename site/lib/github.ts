@@ -62,6 +62,20 @@ export async function getAllReleases(): Promise<Release[]> {
   }
 }
 
+// Atom feed page — more entries than the landing mini-changelog. [] on failure.
+export async function getRecentReleases(perPage = 20): Promise<Release[]> {
+  try {
+    const res = await fetch(`${API}/releases?per_page=${perPage}`, {
+      headers: authHeaders(),
+      next: { revalidate: 3600 },
+    });
+    if (!res.ok) return [];
+    return (await res.json()) as Release[];
+  } catch {
+    return [];
+  }
+}
+
 // CLIENT-side, paginated, for changelog infinite scroll. No token (public rate
 // limit is fine for rare pagination). Returns [] on failure.
 export async function getReleasesPage(page: number): Promise<Release[]> {
