@@ -1,0 +1,31 @@
+{
+  "name": "@aaen-studios/kern",
+  "version": "0.1.0",
+  "description": "Agent skill for kern — build .kern plugins, drive kern-cli and the loopback automation API, manage backups, tasks, and the web remote.",
+  "keywords": [
+    "kern",
+    "agent-skill",
+    "claude-code",
+    "opencode",
+    "cursor",
+    "tauri",
+    "server-manager"
+  ],
+  "homepage": "https://kern.aaenz.no/docs",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ellipog/kern-web.git",
+    "directory": "skills"
+  },
+  "license": "MIT",
+  "files": [
+    "kern",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "prepublishOnly": "node ../scripts/build-skill.mjs --check"
+  }
+}

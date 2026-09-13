@@ -1,0 +1,35 @@
+<!-- generated from content/docs/overview.md - edit the source in kern-web, then run: npm run skill:build -->
+
+# kern docs
+
+kern (always lowercase) is a **cross-platform desktop server manager** built with tauri v2 (rust backend + react frontend). it turns any folder on your computer into a managed server instance — with a live terminal, telemetry, and graceful lifecycle — and you teach it new server types by installing plugins.
+
+think of it as a self-hosted alternative to cloud game-panel tools (pterodactyl, amp, pufferpanel) — but as a **native desktop app** driven by a **plugin system**.
+
+## where to start
+
+- **new to kern?** start with `getting-started` — download, register your first instance, start it.
+- **running servers daily?** `cli` for the terminal and dashboard, `backups` and `tasks` for the overnight safety net.
+- **building a plugin?** read `manifest-reference` first, then `lifecycle`, `config-schema`, and `plugin-ui`.
+- **writing scripts?** `automation-api` is the full JSON surface, `cli` is the friendly client.
+- **publishing?** see `distribution` for the registry flow.
+- **stuck?** `troubleshooting` maps symptoms to fixes; `recipes` has copy-paste setups.
+
+## the big ideas
+
+- **instance** — a registered project folder that kern manages. full crud, with orphaned-state detection.
+- **plugin** — a `.kern` file that teaches kern how to run one type of server.
+- **lifecycle** — `start` / `stop` / `restart` / `install`, declared per-plugin and resolved at launch by rust.
+- **host api** — the bridge plugins use to talk to tauri commands, events, and the ui shell.
+
+> **note** these docs are the source of truth for plugin developers. the app itself ships with two sample plugins — a game server plugin and a bot runner — that exercise nearly every feature.
+
+## beyond the basics
+
+- **preflight** — before a start, kern checks ports the instance used last time (with the owning pid), a pending minecraft eula, and low disk space.
+- **crash watchdog** — auto-restart with backoff after unexpected exits, plus a last-crash report (exit code + log tail) on the monitor tab.
+- **notifications** — in-app center, native os toasts when unfocused, discord/slack webhooks, and regex log alerts. see `notifications`.
+- **schedules** — interval, daily, or cron tasks (restart / start / stop / command / backup / health) with optional pre-restart console announcements.
+- **audit log** — local history of lifecycle actions, config changes, plugin installs, backups, and task runs.
+- **remote access** — a phone control panel on your lan (self-signed https + qr pairing), optionally exposed from anywhere through a cloudflare quick tunnel. see `web-remote`.
+- **cli & automation** — `kern-cli` and a loopback-only json api for scripts. see `cli`.

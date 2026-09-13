@@ -49,8 +49,23 @@ components/       — react components (brand, layout, ui, landing, auth, downlo
 content/          — markdown docs and plugin seed data
 lib/              — utilities (github, supabase, auth, markdown rendering)
 public/           — static assets
+scripts/          — build tooling (skill generation)
+skills/           — the @aaen-studios/kern agent skill package
 supabase/         — database migrations
 ```
+
+## ai agents
+
+the docs ship as an [agent skill](https://skills.sh) so coding agents can build kern plugins and script `kern-cli` without scraping the site:
+
+```bash
+npx skills add ellipog/kern-web          # install the skill (claude code, opencode, cursor, …)
+npm i -D @aaen-studios/kern               # or the npm package (pinned / offline)
+```
+
+agents that prefer the web can use [kern.aaenz.no/llms.txt](https://kern.aaenz.no/llms.txt) and the raw markdown at `/raw/docs/<slug>`.
+
+`skills/kern/references/` is generated from `content/docs/` — after editing docs run `npm run skill:build` (and `npm run skill:check` before committing).
 
 ## contributing
 
@@ -58,4 +73,4 @@ this is an open source project. pull requests, issues, and discussions are welco
 
 ## license
 
-the code in this repository is available under the terms of the [kern](https://github.com/aaen-studios/kern) project.
+the code in this repository is available under the terms of the [MIT license](./LICENSE).

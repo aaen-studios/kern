@@ -30,6 +30,13 @@ const PluginCards = dynamic(
   () => import("@/components/landing/PluginCards").then((m) => m.PluginCards),
   { ssr: false },
 );
+const AgentSkillSection = dynamic(
+  () =>
+    import("@/components/landing/AgentSkillSection").then(
+      (m) => m.AgentSkillSection,
+    ),
+  { ssr: false },
+);
 const DownloadSection = dynamic(
   () => import("@/components/download/DownloadSection").then((m) => m.DownloadSection),
   { ssr: false },
@@ -66,6 +73,10 @@ export function LazySections({
       <ScanDivider />
       <Suspense fallback={<SectionFallback height="h-[500px]" />}>
         <PluginCards />
+      </Suspense>
+      <ScanDivider />
+      <Suspense fallback={<SectionFallback height="h-[400px]" />}>
+        <AgentSkillSection />
       </Suspense>
 
       <section className="mx-auto max-w-[1080px] px-4 py-12 sm:px-6">

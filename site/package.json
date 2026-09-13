@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "skill:build": "node scripts/build-skill.mjs",
+    "skill:check": "node scripts/build-skill.mjs --check"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.0",
