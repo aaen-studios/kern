@@ -2,22 +2,76 @@ import { SectionHeading, Reveal } from "@/components/ui/Reveal";
 import { StatusDots } from "@/components/ui/StatusDots";
 
 /*
-  §9.2 — Roadmap. A short, honest list. Public GitHub Projects/Issues link.
+  §9.2 — Roadmap. A short, honest list: what shipped, what's next.
+  Public GitHub Projects/Issues link.
 */
-const ITEMS: Array<{ label: string; status: "wave" | "breathe" | "idle"; note: string }> = [
-  { label: "macos + linux signed builds", status: "breathe", note: "windows ships first" },
-  { label: "in-app plugin browser", status: "idle", note: "consume this registry from inside kern" },
-  { label: "plugin signing", status: "idle", note: "verified publishers" },
-  { label: "backup/restore for more server types", status: "idle", note: "for all server types" },
-  { label: "telemetry history + charts", status: "idle", note: "beyond live readouts" },
+const ITEMS: Array<{
+  label: string;
+  status: "wave" | "breathe" | "idle";
+  note: string;
+}> = [
+  // shipped
+  {
+    label: "plugin marketplace",
+    status: "wave",
+    note: "browse + install from this registry inside kern",
+  },
+  {
+    label: "macos + linux builds",
+    status: "wave",
+    note: "dmg · appimage — every platform self-updates",
+  },
+  {
+    label: "kern-cli v2",
+    status: "wave",
+    note: "tui + scriptable automation: backups, tasks, webhooks",
+  },
+  {
+    label: "web remote over cloudflare tunnel",
+    status: "wave",
+    note: "drive servers from a browser tab",
+  },
+  // next
+  {
+    label: "plugin signing",
+    status: "idle",
+    note: "sha256 integrity ships; author signatures next",
+  },
+  {
+    label: "backup/restore for more server types",
+    status: "idle",
+    note: "minecraft ships today; more runtimes next",
+  },
+  {
+    label: "telemetry history + charts",
+    status: "idle",
+    note: "beyond live readouts",
+  },
+  {
+    label: "headless / daemon mode",
+    status: "idle",
+    note: "run without the tray ui",
+  },
+  {
+    label: "linux .deb packages",
+    status: "idle",
+    note: "appimage today",
+  },
 ];
+
+const STATUS_LABEL: Record<"wave" | "breathe" | "idle", string> = {
+  wave: "shipped",
+  breathe: "in progress",
+  idle: "planned",
+};
 
 export function RoadmapStrip() {
   return (
     <section className="mx-auto max-w-[1080px] px-4 py-24 sm:px-6">
       <Reveal>
         <SectionHeading kicker="roadmap" title="what&rsquo;s next. honestly.">
-          no fake dates. tracked in the open on github.
+          no fake dates. shipped work stays on the list; the rest is tracked in
+          the open on github.
         </SectionHeading>
       </Reveal>
       <Reveal delay={0.1}>
@@ -30,7 +84,7 @@ export function RoadmapStrip() {
               <div className="flex items-center gap-4">
                 <StatusDots
                   status={it.status}
-                  label={it.status === "breathe" ? "in progress" : "planned"}
+                  label={STATUS_LABEL[it.status]}
                   count={3}
                 />
                 <span className="font-mono text-sm lowercase text-zinc-200">

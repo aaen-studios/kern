@@ -8,25 +8,31 @@ description: how to publish a plugin to the registry.
 
 # distribution
 
-the registry has two phases. both are free to use.
+the registry is live at [kern.aaenz.no](https://kern.aaenz.no) and free to use. there is no pr queue: sign in with github and publish directly.
 
-## phase a — curated registry (ships first)
+## self-publish through the web
 
-submission is a **pull request** to the `kern-registry` github repo. a github action:
+1. sign in at kern.aaenz.no with github.
+2. **submit a plugin** — upload your `.kern`, fill in the details (display name, category, readme, screenshots), and the listing goes live with your first version.
+3. **publish new versions** from the plugin&rsquo;s edit page — drag the `.kern`, add a changelog, hit publish. the public page updates immediately.
 
-1. unzips your `.kern`,
-2. parses `manifest.json`,
-3. checks `id` / `version` / schema,
-4. uploads the blob to r2,
-5. upserts a row in the d1 catalog.
+every version records its `sha256` and size, and kern verifies the hash against the package before installing. storage policies scope uploads to your own plugin path, so no one else can replace your files.
 
-curation = maintainers review the pr. plugins published by the official `ellipog` account get a `verified` badge. this path needs zero auth infra and gives an instant trust signal.
+plugins published by the official `ellipog` account get a `verified` badge.
 
-## phase b — open self-publish
+## the cli publisher
 
-publishers log in with **github oauth** and upload `.kern` files directly through the browser. the worker validates + writes to r2/d1, and the plugin goes live immediately (or after review). star ratings and reviews arrive in this phase.
+maintainers can publish a prebuilt bundle without the browser:
 
-phase a&rsquo;s pr path stays as the "verified/official" tier.
+```bash
+npm run publish:plugins -- ../kern/release-assets/plugins
+```
+
+it verifies each file against the advertised sha256 + size, uploads to storage, and replaces the matching version rows. it needs `SUPABASE_SERVICE_ROLE_KEY` in the environment.
+
+## the in-app marketplace
+
+kern lists the registry from inside the app (plugins → marketplace): browse, search, and install without leaving the app. the registry url is configurable in settings (`registryUrl`).
 
 ## the kern:// deep link
 
@@ -38,4 +44,4 @@ kern://install?url=<https-url-to-.kern>&id=<plugin-id>&v=<version>
 
 if kern is installed, it opens and installs. if not, the site falls back to "download kern first".
 
-> **danger** kern plugins run with full local privileges. only install plugins from authors you trust. surface author identity (github), check install counts and ratings, and read the readme before installing.
+> **danger** kern plugins run with full local privileges. only install plugins from authors you trust. read the readme, check the author&rsquo;s github, and mind the install counts before installing.
