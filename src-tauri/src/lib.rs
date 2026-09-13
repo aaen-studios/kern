@@ -445,6 +445,8 @@ pub fn run() {
             rcon::rcon_players,
             web_remote::web_remote_info,
             web_remote::web_remote_regenerate_token,
+            web_remote::web_remote_regenerate_cert,
+            web_remote::web_remote_interfaces,
             web_remote::web_remote_qr,
             remote_auth::remote_people,
             remote_auth::remote_invite_create,

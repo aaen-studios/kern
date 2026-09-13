@@ -406,7 +406,17 @@ pub fn apply_settings(app: &AppHandle) {
         String::new()
     };
 
-    start(app, &binary, managed, port, &mode, &token, &hostname);
+    // The connector dials the web remote's origin. Honor the bind address: a
+    // loopback-only or interface-specific bind is not reachable on `localhost`
+    // (or vice versa), and `--no-tls-verify` already tolerates the cert.
+    let origin = match cfg.settings.web_remote_bind.trim().parse::<std::net::IpAddr>() {
+        Ok(ip) if ip.is_unspecified() => "127.0.0.1".to_string(),
+        Ok(std::net::IpAddr::V6(v6)) => format!("[{v6}]"),
+        Ok(ip) => ip.to_string(),
+        Err(_) => "127.0.0.1".to_string(),
+    };
+
+    start(app, &binary, managed, port, &mode, &token, &hostname, &origin);
 }
 
 fn start(
@@ -417,6 +427,7 @@ fn start(
     mode: &str,
     token: &str,
     hostname: &str,
+    origin: &str,
 ) {
     let state: tauri::State<'_, TunnelState> = app.state();
     let generation = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
@@ -450,7 +461,7 @@ fn start(
         args.push(token.to_string());
     } else {
         args.push("--url".to_string());
-        args.push(format!("https://localhost:{port}"));
+        args.push(format!("https://{origin}:{port}"));
         args.push("--no-tls-verify".to_string());
     }
     args.push("--no-autoupdate".to_string());

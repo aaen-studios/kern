@@ -152,8 +152,10 @@ export interface AppSettings {
   machineWatts?: number;
   /** Base URL of the plugin registry. */
   registryUrl?: string;
-  /** Enable the optional web remote (HTTPS + token, LAN control panel). */
+  /** Enable the optional web remote (HTTPS + paired devices, LAN panel). */
   webRemoteEnabled?: boolean;
+  /** Interface the web remote binds to: "0.0.0.0", "127.0.0.1", or an IP. */
+  webRemoteBind?: string;
   /** HTTPS port for the web remote (default 7440). */
   webRemotePort?: number;
   /** Expose the web remote publicly through a Cloudflare quick tunnel. */

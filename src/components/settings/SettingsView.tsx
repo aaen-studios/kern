@@ -6,6 +6,7 @@ import { UpdateCheckRow } from "./UpdateCheckRow";
 import { SyncControls } from "./SyncControls";
 import { WebRemotePairing } from "./WebRemotePairing";
 import { RemoteTunnel } from "./RemoteTunnel";
+import { RemoteAccess } from "./RemoteAccess";
 import { RemotePeople } from "./RemotePeople";
 import { AutomationPanel } from "./AutomationPanel";
 import { LogAlertsEditor } from "./LogAlertsEditor";
@@ -272,6 +273,11 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                   value={String(settings.webRemotePort ?? 7440)}
                   onCommit={(v) => void handleNumberSetting("webRemotePort", parseInt(v) || 7440)}
                   type="number"
+                />
+                <RemoteAccess
+                  enabled={!!settings.webRemoteEnabled}
+                  bind={settings.webRemoteBind ?? "0.0.0.0"}
+                  onBind={(v) => void handleStringSetting("webRemoteBind", v)}
                 />
                 <Divider />
                 <ToggleRow

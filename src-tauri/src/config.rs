@@ -61,9 +61,15 @@ pub struct AppSettings {
     /// Base URL of the plugin registry (kern-web). Defaults to the live site.
     #[serde(default = "default_registry_url")]
     pub registry_url: String,
-    /// Enable the optional web remote (HTTPS + token, LAN control panel).
+    /// Enable the optional web remote (HTTPS + paired devices, LAN panel).
     #[serde(default)]
     pub web_remote_enabled: bool,
+    /// Interface/address the web remote binds to. `"0.0.0.0"` = every
+    /// interface, `"127.0.0.1"` = localhost only (e.g. behind your own
+    /// reverse proxy or when the tunnel is the only way in), or a specific
+    /// interface IP.
+    #[serde(default = "default_web_remote_bind")]
+    pub web_remote_bind: String,
     /// HTTPS port for the web remote.
     #[serde(default = "default_web_remote_port")]
     pub web_remote_port: u16,
@@ -143,6 +149,10 @@ fn default_registry_url() -> String {
 
 fn default_web_remote_port() -> u16 {
     7440
+}
+
+fn default_web_remote_bind() -> String {
+    "0.0.0.0".to_string()
 }
 
 fn default_tunnel_mode() -> String {
@@ -452,6 +462,7 @@ fn default_config(app_handle: &AppHandle) -> Result<AppConfig, String> {
             machine_watts: default_machine_watts(),
             registry_url: default_registry_url(),
             web_remote_enabled: false,
+            web_remote_bind: default_web_remote_bind(),
             web_remote_port: default_web_remote_port(),
             cf_tunnel_enabled: false,
             cf_tunnel_mode: default_tunnel_mode(),

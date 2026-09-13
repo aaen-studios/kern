@@ -24,7 +24,10 @@ interface TunnelInfo {
 interface WebRemoteInfo {
   enabled: boolean;
   running: boolean;
+  bind: string;
   port: number;
+  bindError: string | null;
+  certSans: string[];
   token: string;
   urls: string[];
   qrSvg: string;
@@ -130,9 +133,10 @@ export function WebRemotePairing({
     setBusy(true);
     setDownloadPct(0);
     try {
-      setInfo(
-        await invoke<WebRemoteInfo>("tunnel_download_binary"),
-      );
+      // `tunnel_download_binary` returns TunnelInfo (not WebRemoteInfo) — never
+      // assign it to `info`, or the next render crashes on `info.urls`.
+      await invoke("tunnel_download_binary");
+      await refresh();
       notify({ kind: "success", title: "cloudflared installed" });
     } catch (e) {
       notify({ kind: "error", title: "Download failed", message: String(e) });

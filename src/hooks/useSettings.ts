@@ -34,6 +34,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   machineWatts: 120,
   registryUrl: "https://kern.aaenz.no",
   webRemoteEnabled: false,
+  webRemoteBind: "0.0.0.0",
   webRemotePort: 7440,
   cfTunnelEnabled: false,
   cfTunnelMode: "quick",

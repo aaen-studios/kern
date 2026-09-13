@@ -20,7 +20,7 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
-use std::net::{SocketAddr, TcpListener, UdpSocket};
+use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -65,10 +65,23 @@ pub struct WebRemoteState {
     token: Mutex<Option<String>>,
     pub running: AtomicBool,
     pub port: Mutex<u16>,
+    /// Address the listener is bound to (the settings value at last start).
+    bind: Mutex<String>,
+    /// Last listener error (invalid address, bind failure, TLS) so the
+    /// settings UI can show why the panel isn't reachable.
+    error: Mutex<Option<String>>,
     /// Invalidates the accept loop when settings change (start/stop/restart).
     generation: std::sync::atomic::AtomicU64,
     /// Failed auth attempts keyed by peer ip.
     auth_failures: Mutex<HashMap<String, (u32, Instant)>>,
+}
+
+fn set_bind_error(app: &AppHandle, message: Option<String>) {
+    let state: tauri::State<'_, WebRemoteState> = app.state();
+    if let Ok(mut guard) = state.error.lock() {
+        *guard = message;
+    }
+    let _ = app.emit("kern://web-remote-state", ());
 }
 
 /// Brings the web remote up/down to match the saved settings. Safe to call on
@@ -80,44 +93,86 @@ pub fn apply_settings(app_handle: &AppHandle) {
     };
     let enabled = cfg.settings.web_remote_enabled;
     let port = cfg.settings.web_remote_port;
+    let bind = cfg.settings.web_remote_bind.trim().to_string();
+    let bind = if bind.is_empty() {
+        "0.0.0.0".to_string()
+    } else {
+        bind
+    };
     let state: tauri::State<'_, WebRemoteState> = app_handle.state();
     let running = state.running.load(Ordering::SeqCst);
     let active_port = state.port.lock().map(|p| *p).unwrap_or(0);
+    let active_bind = state.bind.lock().map(|b| b.clone()).unwrap_or_default();
+
+    let stop_listener = |app: &AppHandle| {
+        let state: tauri::State<'_, WebRemoteState> = app.state();
+        state
+            .generation
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        for _ in 0..20 {
+            if !state.running.load(Ordering::SeqCst) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    };
 
     if !enabled {
         if running {
             // Bump the generation; the accept loop notices and exits.
-            state
-                .generation
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let _ = app_handle.emit("kern://web-remote-state", ());
+            stop_listener(app_handle);
+            set_bind_error(app_handle, None);
         }
         return;
     }
-    if running && active_port == port {
+
+    // Validate the configured address before touching the listener so a typo
+    // can't silently leave the panel unreachable.
+    let parsed: std::net::IpAddr = match bind.parse() {
+        Ok(ip) => ip,
+        Err(_) => {
+            if running {
+                stop_listener(app_handle);
+            }
+            set_bind_error(
+                app_handle,
+                Some(format!(
+                    "'{bind}' is not a valid IP — use 0.0.0.0 (all interfaces), 127.0.0.1 (localhost only), or one of your interface addresses"
+                )),
+            );
+            return;
+        }
+    };
+
+    if running && active_port == port && active_bind == bind {
         return;
     }
 
     // Restart: invalidate the old loop, wait for it to release the port, spawn.
-    state
-        .generation
-        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    for _ in 0..20 {
-        if !state.running.load(Ordering::SeqCst) {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    stop_listener(app_handle);
 
     // Ensure a token exists before the server accepts connections.
     if let Err(e) = load_or_create_token(app_handle) {
         eprintln!("[web-remote] could not initialise auth token: {e}");
+        set_bind_error(app_handle, Some(format!("auth token unavailable: {e}")));
         return;
     }
+
+    // A concrete bind address should be covered by the certificate; regenerate
+    // when it isn't (wildcard binds are handled by the manual regenerate
+    // action so a transient VPN/docker interface can't rotate the cert).
+    if !cert_covers(&parsed, app_handle) {
+        if let Err(e) = regenerate_cert(app_handle) {
+            eprintln!("[web-remote] cert regeneration failed: {e}");
+        }
+    }
+
+    set_bind_error(app_handle, None);
     let _ = state.port.lock().map(|mut p| *p = port);
+    let _ = state.bind.lock().map(|mut b| *b = bind.clone());
     let generation = state.generation.load(std::sync::atomic::Ordering::SeqCst);
     let handle = app_handle.clone();
-    std::thread::spawn(move || serve(&handle, port, generation));
+    std::thread::spawn(move || serve(&handle, parsed, port, generation));
 }
 
 /// Legacy entry point kept for setup; delegates to [`apply_settings`].
@@ -172,12 +227,37 @@ fn current_token(app_handle: &AppHandle) -> Option<String> {
     token
 }
 
-/// Picks the machine's preferred outbound LAN IP (no traffic is sent).
-fn local_ip() -> Option<String> {
-    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
-    socket.connect("8.8.8.8:80").ok()?;
-    let addr = socket.local_addr().ok()?;
-    Some(addr.ip().to_string())
+/// Formats a host for use in a URL (brackets for IPv6).
+fn url_host(ip: &std::net::IpAddr) -> String {
+    match ip {
+        std::net::IpAddr::V4(v4) => v4.to_string(),
+        std::net::IpAddr::V6(v6) => format!("[{v6}]"),
+    }
+}
+
+/// URLs the panel is reachable at, honoring the configured bind address.
+fn display_urls(bind: &str, port: u16) -> Vec<String> {
+    let mut urls = Vec::new();
+    match bind.parse::<std::net::IpAddr>() {
+        Ok(ip) if ip.is_unspecified() => {
+            for (_, addr) in interface_ips() {
+                if !addr.is_loopback() {
+                    urls.push(format!("https://{}:{port}", url_host(&addr)));
+                }
+            }
+            urls.push(format!("https://localhost:{port}"));
+        }
+        Ok(ip) if ip.is_loopback() => {
+            urls.push(format!("https://localhost:{port}"));
+        }
+        Ok(ip) => {
+            urls.push(format!("https://{}:{port}", url_host(&ip)));
+        }
+        Err(_) => {
+            urls.push(format!("https://localhost:{port}"));
+        }
+    }
+    urls
 }
 
 /// Connection info for the Settings UI: URLs + a QR SVG embedding the token.
@@ -186,7 +266,13 @@ fn local_ip() -> Option<String> {
 pub struct WebRemoteInfo {
     pub enabled: bool,
     pub running: bool,
+    /// Address the listener is bound to (`0.0.0.0` = all interfaces).
+    pub bind: String,
     pub port: u16,
+    /// Non-fatal listener error (invalid address, bind failure, TLS).
+    pub bind_error: Option<String>,
+    /// SANs the current certificate was generated with.
+    pub cert_sans: Vec<String>,
     pub token: String,
     pub urls: Vec<String>,
     pub qr_svg: String,
@@ -218,12 +304,17 @@ fn build_info(app_handle: &AppHandle) -> Result<WebRemoteInfo, String> {
         .lock()
         .map(|p| *p)
         .unwrap_or(cfg.settings.web_remote_port);
+    let bind_error = state.error.lock().ok().and_then(|e| e.clone());
 
-    let mut urls = Vec::new();
-    if let Some(ip) = local_ip() {
-        urls.push(format!("https://{ip}:{port}"));
-    }
-    urls.push(format!("https://localhost:{port}"));
+    let bind = {
+        let value = cfg.settings.web_remote_bind.trim().to_string();
+        if value.is_empty() {
+            "0.0.0.0".to_string()
+        } else {
+            value
+        }
+    };
+    let urls = display_urls(&bind, port);
 
     let pair_url = format!("{}/?token={token}", urls[0]);
     let qr_svg = qr_svg_for(&pair_url);
@@ -238,7 +329,10 @@ fn build_info(app_handle: &AppHandle) -> Result<WebRemoteInfo, String> {
     Ok(WebRemoteInfo {
         enabled: cfg.settings.web_remote_enabled,
         running,
+        bind,
         port,
+        bind_error,
+        cert_sans: stored_sans(app_handle),
         token,
         urls,
         qr_svg,
@@ -274,8 +368,81 @@ pub fn web_remote_regenerate_token(app_handle: AppHandle) -> Result<WebRemoteInf
 }
 
 // ---------------------------------------------------------------------------
-// TLS material
+// Interfaces + TLS material
 // ---------------------------------------------------------------------------
+
+/// One non-link-local interface address with a coarse classification.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InterfaceInfo {
+    pub name: String,
+    pub ip: String,
+    /// `"loopback"`, `"private"` (rfc1918 / ULA), or `"public"`.
+    pub kind: String,
+}
+
+fn is_link_local(ip: &std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => v4.is_link_local(),
+        std::net::IpAddr::V6(v6) => (v6.segments()[0] & 0xffc0) == 0xfe80,
+    }
+}
+
+fn classify(ip: &std::net::IpAddr) -> &'static str {
+    if ip.is_loopback() {
+        "loopback"
+    } else {
+        match ip {
+            std::net::IpAddr::V4(v4) => {
+                if v4.is_private() {
+                    "private"
+                } else {
+                    "public"
+                }
+            }
+            std::net::IpAddr::V6(v6) => {
+                if (v6.segments()[0] & 0xfe00) == 0xfc00 {
+                    "private"
+                } else {
+                    "public"
+                }
+            }
+        }
+    }
+}
+
+/// Every usable interface address on the machine (loopback first).
+fn interface_ips() -> Vec<(String, std::net::IpAddr)> {
+    let networks = sysinfo::Networks::new_with_refreshed_list();
+    let mut out: Vec<(String, std::net::IpAddr)> = Vec::new();
+    for (name, data) in &networks {
+        for network in data.ip_networks() {
+            let ip = network.addr;
+            if ip.is_unspecified() || is_link_local(&ip) {
+                continue;
+            }
+            if out.iter().any(|(_, existing)| *existing == ip) {
+                continue;
+            }
+            out.push((name.clone(), ip));
+        }
+    }
+    out.sort_by_key(|(_, ip)| if ip.is_loopback() { 0 } else { 1 });
+    out
+}
+
+/// Lists the machine's interface addresses for the bind picker.
+#[tauri::command]
+pub fn web_remote_interfaces() -> Vec<InterfaceInfo> {
+    interface_ips()
+        .into_iter()
+        .map(|(name, ip)| InterfaceInfo {
+            name,
+            ip: ip.to_string(),
+            kind: classify(&ip).to_string(),
+        })
+        .collect()
+}
 
 fn cert_dir(app_handle: &AppHandle) -> Result<PathBuf, String> {
     let dir = config::config_dir(app_handle)?.join("web_remote");
@@ -283,8 +450,85 @@ fn cert_dir(app_handle: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+/// SANs a fresh certificate should carry: localhost, loopback, and every
+/// current interface address.
+fn default_sans() -> Vec<String> {
+    let mut sans = vec![
+        "localhost".to_string(),
+        "127.0.0.1".to_string(),
+        "::1".to_string(),
+    ];
+    for (_, ip) in interface_ips() {
+        let value = ip.to_string();
+        if !sans.contains(&value) {
+            sans.push(value);
+        }
+    }
+    sans
+}
+
+fn sans_path(app_handle: &AppHandle) -> Result<PathBuf, String> {
+    Ok(cert_dir(app_handle)?.join("cert.sans"))
+}
+
+/// SAN list the current certificate was generated with (empty when unknown).
+pub fn stored_sans(app_handle: &AppHandle) -> Vec<String> {
+    sans_path(app_handle)
+        .ok()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .map(|raw| {
+            raw.lines()
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// True when the persisted cert already covers `bind`. Wildcard binds are
+/// always "covered": any interface IP is served, and rotating the certificate
+/// whenever a transient adapter appears would make users re-accept it
+/// constantly (the settings UI offers a manual regenerate instead).
+fn cert_covers(bind: &std::net::IpAddr, app_handle: &AppHandle) -> bool {
+    let cert_path = cert_dir(app_handle).map(|d| d.join("cert.der"));
+    let Ok(cert_path) = cert_path else {
+        return false;
+    };
+    if !cert_path.is_file() {
+        return false;
+    }
+    if bind.is_unspecified() {
+        return true;
+    }
+    let sans = stored_sans(app_handle);
+    if sans.is_empty() {
+        // Old cert without a recorded SAN list — regenerate to be sure.
+        return false;
+    }
+    sans.iter().any(|s| s == &bind.to_string())
+}
+
+/// Regenerates the self-signed certificate/key with the current interface set.
+pub fn regenerate_cert(app_handle: &AppHandle) -> Result<(), String> {
+    let dir = cert_dir(app_handle)?;
+    let cert_path = dir.join("cert.der");
+    let key_path = dir.join("key.der");
+    let _ = std::fs::remove_file(&cert_path);
+    let _ = std::fs::remove_file(&key_path);
+    let sans = default_sans();
+    let certified = rcgen::generate_simple_self_signed(sans.clone())
+        .map_err(|e| format!("failed to generate TLS certificate: {e}"))?;
+    let cert = certified.cert.der().to_vec();
+    let key = certified.key_pair.serialize_der();
+    std::fs::write(&cert_path, &cert).map_err(|e| format!("failed to write cert: {e}"))?;
+    std::fs::write(&key_path, &key).map_err(|e| format!("failed to write key: {e}"))?;
+    std::fs::write(sans_path(app_handle)?, sans.join("\n"))
+        .map_err(|e| format!("failed to write cert sans: {e}"))?;
+    Ok(())
+}
+
 /// Loads the persisted DER cert/key, generating a self-signed pair on first
-/// use (SANs: localhost, 127.0.0.1, and the machine's LAN IP).
+/// use (SANs: localhost, loopback, and every interface address).
 fn load_or_create_cert(app_handle: &AppHandle) -> Result<(Vec<u8>, Vec<u8>), String> {
     let dir = cert_dir(app_handle)?;
     let cert_path = dir.join("cert.der");
@@ -295,17 +539,18 @@ fn load_or_create_cert(app_handle: &AppHandle) -> Result<(Vec<u8>, Vec<u8>), Str
         return Ok((cert, key));
     }
 
-    let mut sans = vec!["localhost".to_string(), "127.0.0.1".to_string()];
-    if let Some(ip) = local_ip() {
-        sans.push(ip);
-    }
-    let certified = rcgen::generate_simple_self_signed(sans)
-        .map_err(|e| format!("failed to generate TLS certificate: {e}"))?;
-    let cert = certified.cert.der().to_vec();
-    let key = certified.key_pair.serialize_der();
-    std::fs::write(&cert_path, &cert).map_err(|e| format!("failed to write cert: {e}"))?;
-    std::fs::write(&key_path, &key).map_err(|e| format!("failed to write key: {e}"))?;
+    regenerate_cert(app_handle)?;
+    let cert = std::fs::read(&cert_path).map_err(|e| format!("failed to read cert: {e}"))?;
+    let key = std::fs::read(&key_path).map_err(|e| format!("failed to read key: {e}"))?;
     Ok((cert, key))
+}
+
+/// Regenerates the certificate and restarts the listener so it takes effect.
+#[tauri::command]
+pub fn web_remote_regenerate_cert(app_handle: AppHandle) -> Result<WebRemoteInfo, String> {
+    regenerate_cert(&app_handle)?;
+    apply_settings(&app_handle);
+    build_info(&app_handle)
 }
 
 fn tls_config(app_handle: &AppHandle) -> Result<Arc<ServerConfig>, String> {
@@ -324,18 +569,23 @@ fn tls_config(app_handle: &AppHandle) -> Result<Arc<ServerConfig>, String> {
 // Server loop
 // ---------------------------------------------------------------------------
 
-fn serve(handle: &AppHandle, port: u16, generation: u64) {
+fn serve(handle: &AppHandle, bind: std::net::IpAddr, port: u16, generation: u64) {
     let tls = match tls_config(handle) {
         Ok(cfg) => cfg,
         Err(e) => {
             eprintln!("[web-remote] TLS setup failed: {e}");
+            set_bind_error(handle, Some(format!("TLS setup failed: {e}")));
             return;
         }
     };
-    let listener = match TcpListener::bind(("0.0.0.0", port)) {
+    let listener = match TcpListener::bind(std::net::SocketAddr::new(bind, port)) {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("[web-remote] failed to bind :{port}: {e}");
+            eprintln!("[web-remote] failed to bind {bind}:{port}: {e}");
+            set_bind_error(
+                handle,
+                Some(format!("failed to bind {bind}:{port} — {e}")),
+            );
             return;
         }
     };
@@ -346,7 +596,7 @@ fn serve(handle: &AppHandle, port: u16, generation: u64) {
         let state: tauri::State<'_, WebRemoteState> = handle.state();
         state.running.store(true, Ordering::SeqCst);
     }
-    eprintln!("[web-remote] listening on https://0.0.0.0:{port} (paired devices only)");
+    eprintln!("[web-remote] listening on https://{bind}:{port} (paired devices only)");
     let _ = handle.emit("kern://web-remote-state", ());
 
     let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -1030,10 +1280,22 @@ fn remote_admin(
         ("GET", ["status"]) => {
             let tunnel = crate::tunnel::info(handle);
             let cfg = config::load_config(handle).ok();
+            let state: tauri::State<'_, WebRemoteState> = handle.state();
+            let bind_error = state.error.lock().ok().and_then(|e| e.clone());
+            let bind = cfg
+                .as_ref()
+                .map(|c| c.settings.web_remote_bind.clone())
+                .filter(|b| !b.trim().is_empty())
+                .unwrap_or_else(|| "0.0.0.0".to_string());
+            let port = cfg.as_ref().map(|c| c.settings.web_remote_port).unwrap_or(7440);
             json(serde_json::json!({
                 "version": env!("CARGO_PKG_VERSION"),
                 "tunnel": tunnel,
                 "registryUrl": cfg.as_ref().map(|c| c.settings.registry_url.clone()),
+                "bind": bind,
+                "port": port,
+                "bindError": bind_error,
+                "urls": display_urls(&bind, port),
             }))
         }
         ("POST", ["tunnel"]) => {

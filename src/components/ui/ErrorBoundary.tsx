@@ -29,10 +29,26 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   componentDidCatch(error: Error, info: ErrorInfo) {
     // Log to the console so developers can inspect the stack during dev.
     console.error("[ErrorBoundary]", error, info.componentStack);
+    this.componentStack = info.componentStack ?? null;
   }
 
+  /** Component stack from the last crash (dev aid; cleared on reload). */
+  componentStack: string | null = null;
+
   handleReload = () => {
+    this.componentStack = null;
     this.setState({ hasError: false, error: null });
+  };
+
+  handleCopy = async () => {
+    const { error } = this.state;
+    if (!error) return;
+    const payload = `${error.stack ?? error.message}\n\ncomponents:${this.componentStack ?? "?"}`;
+    try {
+      await navigator.clipboard.writeText(payload);
+    } catch {
+      /* clipboard unavailable — nothing to do */
+    }
   };
 
   render() {
@@ -51,12 +67,28 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
               {this.state.error.message}
             </pre>
           )}
+          {this.componentStack && (
+            <details className="max-w-lg w-full">
+              <summary className="text-[10px] text-zinc-600 cursor-pointer text-center">
+                component stack
+              </summary>
+              <pre className="mt-2 text-[10px] text-zinc-600 font-mono whitespace-pre-wrap max-h-40 overflow-auto border border-grid-bounds bg-bg-surface p-2">
+                {this.componentStack.trim()}
+              </pre>
+            </details>
+          )}
           <div className="flex gap-2 mt-2">
             <button
               onClick={this.handleReload}
               className="px-3 py-1.5 text-xs text-bg-core bg-signal-high hover:opacity-80 font-semibold transition-opacity"
             >
               reload view
+            </button>
+            <button
+              onClick={() => void this.handleCopy()}
+              className="px-3 py-1.5 text-xs text-zinc-400 border border-grid-bounds hover:text-zinc-200 transition-colors"
+            >
+              copy error
             </button>
           </div>
         </div>
