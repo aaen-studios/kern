@@ -316,7 +316,7 @@ export function Markdown({ content }: { content: string }) {
   const blocks = parseBlocks(content);
 
   return (
-    <div className="space-y-4 font-mono text-[13px] leading-relaxed text-zinc-300">
+    <div className="space-y-4 font-mono text-prose text-zinc-300">
       {blocks.map((b, bi) => {
         switch (b.type) {
           case "code":

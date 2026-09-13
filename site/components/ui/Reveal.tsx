@@ -2,18 +2,30 @@
 
 import { motion, useReducedMotion } from "motion/react";
 import type { ReactNode } from "react";
+import { Kicker } from "@/components/ui/Kicker";
 
 /*
   Staggered section reveal. Skipped entirely under prefers-reduced-motion
   (renders children statically). Used across landing sections (§10).
+
+  direction sets the entry offset; the default matches the original motion.
 */
+const OFFSETS = {
+  up: { y: 12 },
+  left: { x: 16 },
+  right: { x: -16 },
+  none: {},
+} as const;
+
 export function Reveal({
   children,
   delay = 0,
+  direction = "up",
   className = "",
 }: {
   children: ReactNode;
   delay?: number;
+  direction?: keyof typeof OFFSETS;
   className?: string;
 }) {
   const reduce = useReducedMotion();
@@ -22,10 +34,10 @@ export function Reveal({
   return (
     <motion.div
       className={className}
-      initial={{ opacity: 0, y: 12 }}
-      whileInView={{ opacity: 1, y: 0 }}
+      initial={{ opacity: 0, ...OFFSETS[direction] }}
+      whileInView={{ opacity: 1, x: 0, y: 0 }}
       viewport={{ once: true, margin: "-60px" }}
-      transition={{ duration: 0.4, delay, ease: "easeOut" }}
+      transition={{ duration: 0.4, delay, ease: [0.25, 1, 0.5, 1] }}
     >
       {children}
     </motion.div>
@@ -43,11 +55,8 @@ export function SectionHeading({
 }) {
   return (
     <div className="mb-10">
-      <p className="font-mono text-xs lowercase text-signal-low">
-        {"// "}
-        {kicker}
-      </p>
-      <h2 className="mt-2 font-mono text-2xl font-medium lowercase text-zinc-100 sm:text-3xl">
+      <Kicker>{kicker}</Kicker>
+      <h2 className="mt-2 font-mono text-h2 font-medium lowercase text-zinc-100">
         {title}
       </h2>
       {children && (

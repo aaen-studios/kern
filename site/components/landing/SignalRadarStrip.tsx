@@ -1,4 +1,5 @@
 import { RadarMark } from "@/components/brand/RadarMark";
+import { Section } from "@/components/ui/Section";
 
 /*
   §10.3 — Signal Radar / brand strip. A short, poetic paragraph in the kern
@@ -6,8 +7,8 @@ import { RadarMark } from "@/components/brand/RadarMark";
 */
 export function SignalRadarStrip() {
   return (
-    <section className="bg-bg-surface/30">
-      <div className="mx-auto flex max-w-[1080px] flex-col items-start gap-6 px-4 py-16 sm:flex-row sm:items-center sm:px-6">
+    <Section band size="tight">
+      <div className="flex flex-col items-start gap-6 sm:flex-row sm:items-center">
         <RadarMark size="lg" className="shrink-0" />
         <div className="max-w-2xl">
           <p className="font-mono text-sm lowercase leading-relaxed text-zinc-300">
@@ -18,6 +19,6 @@ export function SignalRadarStrip() {
           </p>
         </div>
       </div>
-    </section>
+    </Section>
   );
 }

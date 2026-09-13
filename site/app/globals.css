@@ -18,11 +18,33 @@
 
   --font-mono: var(--font-jetbrains-mono), "JetBrains Mono", "Cascadia Code",
     "Fira Code", ui-monospace, monospace;
+
+  /* Fluid type scale — UI stays dense at 13px; display sizes scale with the
+     viewport. Prose (docs, readmes) gets a roomier 15px/1.7. */
+  --text-display: clamp(2.75rem, 6vw, 4.5rem);
+  --text-display--line-height: 1.05;
+  --text-display--letter-spacing: -0.02em;
+  --text-h2: clamp(1.6rem, 3.2vw, 2.4rem);
+  --text-h2--line-height: 1.15;
+  --text-h2--letter-spacing: -0.01em;
+  --text-h3: clamp(1.25rem, 2vw, 1.6rem);
+  --text-h3--line-height: 1.25;
+  --text-prose: 15px;
+  --text-prose--line-height: 1.7;
+
+  /* Motion — two easings, three durations. Every transition on the site
+     should come from this set. */
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+  --ease-in-out-quart: cubic-bezier(0.76, 0, 0.24, 1);
 }
 
 :root {
   --background: #050506;
   --foreground: #d4d4d8; /* zinc-300 */
+
+  --dur-fast: 120ms;
+  --dur-base: 200ms;
+  --dur-slow: 400ms;
 }
 
 html {
@@ -68,6 +90,29 @@ body {
   background-size: 10px 10px;
   background-repeat: repeat;
   background-position: center;
+}
+
+/*
+  Elevation ladder — pick by information hierarchy, never decoration.
+    flat    = default panel on bg-core (same material the site already uses)
+    raised  = interactive/selected panel, lifts off the page
+    glow    = one focal panel per view (active/highlight)
+*/
+@utility panel-flat {
+  background-color: var(--color-bg-core);
+  box-shadow: inset 0 0 0 1px rgba(22, 25, 32, 0.9);
+}
+@utility panel-raised {
+  background-color: var(--color-bg-surface);
+  box-shadow:
+    inset 0 0 0 1px rgba(22, 25, 32, 0.9),
+    0 10px 30px -12px rgba(0, 0, 0, 0.8);
+}
+@utility panel-glow {
+  background-color: var(--color-bg-core);
+  box-shadow:
+    inset 0 0 0 1px rgba(22, 25, 32, 0.9),
+    0 0 40px -12px rgba(76, 245, 160, 0.35);
 }
 
 /*
@@ -332,5 +377,80 @@ body {
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
     scroll-behavior: auto !important;
+  }
+}
+
+/* ---- view transitions (React <ViewTransition>; progressive enhancement) ----
+   Class names are attached in later phases via enter/exit/share props. */
+
+@keyframes vt-fade {
+  from {
+    opacity: 0;
+    filter: blur(3px);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+  }
+}
+@keyframes vt-slide {
+  from {
+    translate: var(--vt-slide-from, 16px);
+  }
+  to {
+    translate: 0;
+  }
+}
+
+::view-transition-old(.vt-fade) {
+  animation: var(--dur-fast) var(--ease-out-quart) both vt-fade reverse;
+}
+::view-transition-new(.vt-fade) {
+  animation: var(--dur-base) var(--ease-out-quart) both vt-fade;
+}
+
+::view-transition-old(.nav-forward) {
+  --vt-slide-from: -60px;
+  animation:
+    var(--dur-fast) var(--ease-out-quart) both vt-fade reverse,
+    var(--dur-slow) var(--ease-in-out-quart) both vt-slide reverse;
+}
+::view-transition-new(.nav-forward) {
+  --vt-slide-from: 60px;
+  animation:
+    var(--dur-base) var(--ease-out-quart) var(--dur-fast) both vt-fade,
+    var(--dur-slow) var(--ease-in-out-quart) both vt-slide;
+}
+::view-transition-old(.nav-back) {
+  --vt-slide-from: 60px;
+  animation:
+    var(--dur-fast) var(--ease-out-quart) both vt-fade reverse,
+    var(--dur-slow) var(--ease-in-out-quart) both vt-slide reverse;
+}
+::view-transition-new(.nav-back) {
+  --vt-slide-from: -60px;
+  animation:
+    var(--dur-base) var(--ease-out-quart) var(--dur-fast) both vt-fade,
+    var(--dur-slow) var(--ease-in-out-quart) both vt-slide;
+}
+
+/* the nav is the spatial anchor — it never slides */
+::view-transition-group(site-header) {
+  animation: none;
+  z-index: 100;
+}
+::view-transition-old(site-header) {
+  display: none;
+}
+::view-transition-new(site-header) {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(*),
+  ::view-transition-new(*),
+  ::view-transition-group(*) {
+    animation-duration: 0.001ms !important;
+    animation-delay: 0ms !important;
   }
 }

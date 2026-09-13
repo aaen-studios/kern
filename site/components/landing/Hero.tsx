@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { RadarShader } from "@/components/landing/RadarShader";
+import { Radar } from "@/components/radar/Radar";
 import { VersionBadge } from "@/components/download/VersionBadge";
 import { Badge } from "@/components/ui/Badge";
 import { StatusDots } from "@/components/ui/StatusDots";
@@ -28,7 +28,7 @@ export function Hero({ release }: { release: Release | null }) {
     <section className="relative flex min-h-[100svh] items-center overflow-hidden">
       {/* shader background — decorative */}
       <div className="absolute inset-0" aria-hidden="true">
-        <RadarShader />
+        <Radar />
       </div>
       {/* faint static dot-grid accent over the shader */}
       <div
@@ -44,7 +44,7 @@ export function Hero({ release }: { release: Release | null }) {
           </span>
         </div>
 
-        <h1 className="font-mono text-4xl lowercase leading-[1.05] text-zinc-100 sm:text-6xl">
+        <h1 className="font-mono text-display lowercase text-zinc-100">
           <span
             ref={line1Ref}
             style={{

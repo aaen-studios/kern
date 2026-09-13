@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 import { SectionHeading, Reveal } from "@/components/ui/Reveal";
+import { Section } from "@/components/ui/Section";
+import { Panel } from "@/components/ui/Panel";
 import { CodeCopy } from "@/components/docs/CodeCopy";
 
 /*
@@ -33,7 +35,7 @@ const MANUAL = [
 
 export function AgentSkillSection() {
   return (
-    <section id="agents" className="mx-auto max-w-[1080px] px-4 py-24 sm:px-6">
+    <Section id="agents">
       <Reveal>
         <SectionHeading kicker="ai agents" title="teach your agent kern.">
           the docs ship as an agent skill — manifests, lifecycle, kern-cli, the
@@ -44,10 +46,7 @@ export function AgentSkillSection() {
 
       <div className="grid gap-4 sm:grid-cols-2">
         <Reveal delay={0.1}>
-          <div
-            className="h-full bg-bg-core p-6"
-            style={{ boxShadow: "inset 0 0 0 1px rgba(22,25,32,0.9)" }}
-          >
+          <Panel className="h-full p-6">
             <p className="font-mono text-xs lowercase text-signal-low">
               {"// paste this into your agent"}
             </p>
@@ -60,14 +59,11 @@ export function AgentSkillSection() {
             <p className="mt-3 font-mono text-[11px] lowercase text-signal-low">
               any agent with shell access will do the rest.
             </p>
-          </div>
+          </Panel>
         </Reveal>
 
         <Reveal delay={0.2}>
-          <div
-            className="h-full bg-bg-core p-6"
-            style={{ boxShadow: "inset 0 0 0 1px rgba(22,25,32,0.9)" }}
-          >
+          <Panel className="h-full p-6">
             <p className="font-mono text-xs lowercase text-signal-low">
               {"// or wire it up yourself"}
             </p>
@@ -107,9 +103,9 @@ export function AgentSkillSection() {
                 skills/kern
               </Link>
             </p>
-          </div>
+          </Panel>
         </Reveal>
       </div>
-    </section>
+    </Section>
   );
 }

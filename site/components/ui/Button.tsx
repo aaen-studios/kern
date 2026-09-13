@@ -14,7 +14,7 @@ type Size = "sm" | "md" | "lg";
 
 const base =
   "inline-flex items-center justify-center gap-2 font-mono lowercase tracking-tight " +
-  "transition-colors duration-150 select-none " +
+  "transition-colors duration-[var(--dur-fast)] " +
   "focus-visible:outline-2 focus-visible:outline-offset-2 " +
   "disabled:opacity-40 disabled:cursor-not-allowed";
 

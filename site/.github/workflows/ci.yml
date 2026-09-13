@@ -1,0 +1,39 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: lint
+        run: npm run lint
+
+      - name: typecheck
+        run: npx tsc --noEmit
+
+      - name: skill references in sync
+        run: npm run skill:check
+
+      - name: build
+        run: npm run build
+        env:
+          # build degrades gracefully without secrets (seed registry,
+          # release fetch returns null) — keep CI secretless.
+          NEXT_TELEMETRY_DISABLED: "1"

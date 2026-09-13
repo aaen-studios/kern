@@ -1,4 +1,6 @@
 import { SectionHeading, Reveal } from "@/components/ui/Reveal";
+import { Section } from "@/components/ui/Section";
+import { Panel } from "@/components/ui/Panel";
 import { StatusDots } from "@/components/ui/StatusDots";
 
 /*
@@ -8,7 +10,7 @@ import { StatusDots } from "@/components/ui/StatusDots";
 */
 export function AutoUpdateSection() {
   return (
-    <section className="mx-auto max-w-[1080px] px-4 py-24 sm:px-6">
+    <Section>
       <Reveal>
         <SectionHeading kicker="auto-update" title="updates itself. signed.">
           the in-app updater pulls minisign-signed archives from github releases.
@@ -18,10 +20,7 @@ export function AutoUpdateSection() {
       </Reveal>
 
       <Reveal delay={0.1}>
-        <div
-          className="flex flex-col items-start gap-4 bg-bg-core p-6 sm:flex-row sm:items-center sm:justify-between"
-          style={{ boxShadow: "inset 0 0 0 1px rgba(22,25,32,0.9)" }}
-        >
+        <Panel className="flex flex-col items-start gap-4 p-6 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-4">
             <StatusDots status="breathe" label="checking for updates" count={4} />
             <div>
@@ -36,8 +35,8 @@ export function AutoUpdateSection() {
           <span className="inline-flex items-center bg-signal-high/10 px-3 py-1.5 font-mono text-[11px] lowercase text-signal-high ring-1 ring-signal-high/30">
             ✓ verified
           </span>
-        </div>
+        </Panel>
       </Reveal>
-    </section>
+    </Section>
   );
 }
