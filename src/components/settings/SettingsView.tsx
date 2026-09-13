@@ -5,6 +5,8 @@ import type { AppSettings, LogAlertRule } from "../../types/server";
 import { UpdateCheckRow } from "./UpdateCheckRow";
 import { SyncControls } from "./SyncControls";
 import { WebRemotePairing } from "./WebRemotePairing";
+import { RemoteTunnel } from "./RemoteTunnel";
+import { RemotePeople } from "./RemotePeople";
 import { AutomationPanel } from "./AutomationPanel";
 import { LogAlertsEditor } from "./LogAlertsEditor";
 import { AuditLogPanel } from "./AuditLogPanel";
@@ -274,10 +276,18 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                 <Divider />
                 <ToggleRow
                   label="Expose via Cloudflare tunnel"
-                  description="Run a cloudflared quick tunnel so the panel is reachable from anywhere at a random *.trycloudflare.com URL (no port forwarding). Public URL + token = full control; keep it off unless you need it."
+                  description="Run a cloudflared tunnel so the panel is reachable from anywhere. Quick = random trycloudflare.com URL, no account. Named = stable hostname on your own domain. Public URL + paired devices = control; keep it off unless you need it."
                   checked={!!settings.cfTunnelEnabled}
                   disabled={!settings.webRemoteEnabled}
                   onChange={(v) => void handleSetting("cfTunnelEnabled", v)}
+                />
+                <RemoteTunnel
+                  webRemoteEnabled={!!settings.webRemoteEnabled}
+                  tunnelEnabled={!!settings.cfTunnelEnabled}
+                  mode={settings.cfTunnelMode ?? "quick"}
+                  hostname={settings.cfTunnelHostname ?? ""}
+                  onMode={(v) => void handleStringSetting("cfTunnelMode", v)}
+                  onHostname={(v) => void handleStringSetting("cfTunnelHostname", v)}
                 />
                 <Divider />
                 <WebRemotePairing
@@ -286,9 +296,19 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                 />
               </div>
               <p className="mt-2 text-[11px] text-zinc-600">
-                Access is token-protected; the token is stored in the OS
-                credential vault and can be rotated above.
+                Access is token-protected; devices pair with single-use invites
+                and per-user roles below.
               </p>
+            </section>
+
+            {/* ── Remote people section ───────────────────────────────── */}
+            <section>
+              <h3 className="text-[10px] tracking-[0.2em] uppercase text-zinc-500 mb-3">
+                web remote people
+              </h3>
+              <div className="border border-grid-bounds">
+                <RemotePeople enabled={!!settings.webRemoteEnabled} />
+              </div>
             </section>
 
             {/* ── Sync section ────────────────────────────────────────── */}

@@ -158,6 +158,10 @@ export interface AppSettings {
   webRemotePort?: number;
   /** Expose the web remote publicly through a Cloudflare quick tunnel. */
   cfTunnelEnabled?: boolean;
+  /** Tunnel flavour: "quick" (random URL) or "named" (stable hostname). */
+  cfTunnelMode?: string;
+  /** Public hostname for named tunnels (display + QR only). */
+  cfTunnelHostname?: string;
   /** Last quick-tunnel URL reported by cloudflared (host-managed). */
   cfTunnelUrl?: string;
   /** Passphrase required to access the web remote (empty = open on LAN). */

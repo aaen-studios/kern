@@ -1,10 +1,14 @@
-//! Cloudflare quick tunnel for the web remote.
+//! Cloudflare tunnels for the web remote.
 //!
-//! When enabled (requires the web remote), kern runs
-//! `cloudflared tunnel --url https://localhost:<port> --no-tls-verify` as a
-//! hidden child process and publishes the random `*.trycloudflare.com` URL it
-//! reports. That makes the mobile control panel reachable from anywhere
-//! without port forwarding — the tunnel dials out to Cloudflare's edge.
+//! Two flavours, both run `cloudflared` as a hidden child process:
+//!
+//!   * **quick** — `cloudflared tunnel --url https://localhost:<port>
+//!     --no-tls-verify` publishes a random `*.trycloudflare.com` URL. No
+//!     account, no port forwarding; the connector dials out to Cloudflare.
+//!   * **named** — `cloudflared tunnel run --token <token>` connects a tunnel
+//!     created in the Cloudflare Zero Trust dashboard, so the panel lives at
+//!     a stable hostname on the user's own domain. The connector token lives
+//!     in the OS credential vault, never in config.json.
 //!
 //! Binary resolution: a `cloudflared` on PATH is used as-is; otherwise kern
 //! downloads the official release binary into `<app_data>/bin/` on request
@@ -14,18 +18,23 @@
 //! a named tunnel there would have it loaded instead of the quick tunnel (the
 //! connector registers the named tunnel while the banner advertises a quick
 //! hostname that never routes → endless 404s). kern passes its own
-//! `--config <app_data>/tunnel.yml` so quick tunnels never touch user config.
+//! `--config <app_data>/tunnel.yml` so user config is never touched.
 //!
-//! Security: a public URL is a public credential. The web remote's bearer
-//! token still gates every request, but the pair URL embeds it, so the UI
-//! warns and the tunnel is opt-in and off by default.
+//! Resilience: an unexpected exit restarts the connector with backoff (the
+//! tunnel is expected to stay up while the setting is on), and the exit is
+//! surfaced in the settings UI / panel while it happens.
+//!
+//! Security: a public URL is a public credential. The web remote's device
+//! tokens still gate every request, but tunnel URLs are exposed, so the tunnel
+//! is opt-in and off by default. Named tunnels can additionally be protected
+//! with Cloudflare Access at the edge.
 
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use regex::Regex;
 use serde::Serialize;
@@ -34,16 +43,23 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::config;
 use crate::process;
 
+const NAMED_KEYRING_SERVICE: &str = "kern.cftunnel";
+const NAMED_KEYRING_USER: &str = "token";
+
 /// Shared tunnel state. `generation` invalidates reader/watcher threads from a
 /// previous start so quick toggles can't cross-wire their state.
 #[derive(Default)]
 pub struct TunnelState {
     generation: AtomicU64,
     running: AtomicBool,
+    /// Consecutive restart attempts (reset after a healthy run).
+    restart_attempts: AtomicU32,
     url: Mutex<Option<String>>,
     error: Mutex<Option<String>>,
     child: Mutex<Option<Arc<Mutex<Child>>>>,
     port: Mutex<u16>,
+    mode: Mutex<String>,
+    started_at: Mutex<Option<Instant>>,
 }
 
 /// Snapshot for the settings UI.
@@ -60,6 +76,12 @@ pub struct TunnelInfo {
     pub binary: Option<String>,
     /// True when the binary came from our managed `<app_data>/bin` copy.
     pub managed: bool,
+    /// `"quick"` or `"named"`.
+    pub mode: String,
+    /// Configured hostname for named tunnels (display only).
+    pub hostname: Option<String>,
+    /// True when a named-tunnel connector token is stored.
+    pub named_token_set: bool,
 }
 
 fn state_generation(app: &AppHandle) -> u64 {
@@ -125,6 +147,39 @@ fn find_binary(app: &AppHandle) -> Option<(PathBuf, bool)> {
     }
     None
 }
+
+// ── named tunnel connector token (credential vault) ─────────────────────────
+
+fn named_entry() -> Result<keyring::Entry, String> {
+    keyring::Entry::new(NAMED_KEYRING_SERVICE, NAMED_KEYRING_USER)
+        .map_err(|e| format!("credential store unavailable: {e}"))
+}
+
+pub fn named_token() -> Option<String> {
+    named_entry()
+        .ok()?
+        .get_password()
+        .ok()
+        .filter(|t| !t.trim().is_empty())
+}
+
+fn set_named_token(token: &str) -> Result<(), String> {
+    named_entry()?
+        .set_password(token.trim())
+        .map_err(|e| format!("failed to store tunnel token: {e}"))
+}
+
+fn clear_named_token() -> Result<(), String> {
+    let entry = named_entry()?;
+    match entry.delete_credential() {
+        Ok(()) => Ok(()),
+        // Missing is fine — clearing an unset token is a no-op.
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(format!("failed to remove tunnel token: {e}")),
+    }
+}
+
+// ── lifecycle ───────────────────────────────────────────────────────────────
 
 /// Official release asset name for this platform.
 fn release_asset() -> Result<&'static str, String> {
@@ -214,12 +269,57 @@ pub fn tunnel_apply(app_handle: AppHandle) -> TunnelInfo {
     info(&app_handle)
 }
 
+/// Stores a named-tunnel connector token, switches the mode to `named`, and
+/// brings the tunnel up. The token never touches config.json.
+#[tauri::command]
+pub fn tunnel_set_named(
+    app_handle: AppHandle,
+    token: String,
+    hostname: String,
+) -> Result<TunnelInfo, String> {
+    if token.trim().is_empty() {
+        return Err("paste the connector token from the Cloudflare dashboard".to_string());
+    }
+    set_named_token(&token)?;
+    config::with_config_mut(&app_handle, |cfg| {
+        cfg.settings.cf_tunnel_enabled = true;
+        cfg.settings.cf_tunnel_mode = "named".to_string();
+        if !hostname.trim().is_empty() {
+            cfg.settings.cf_tunnel_hostname =
+                hostname.trim().trim_end_matches('/').to_string();
+        }
+        Ok(())
+    })?;
+    apply_settings(&app_handle);
+    Ok(info(&app_handle))
+}
+
+/// Forgets the named-tunnel token and falls back to quick-tunnel mode.
+#[tauri::command]
+pub fn tunnel_clear_named(app_handle: AppHandle) -> Result<TunnelInfo, String> {
+    let _ = clear_named_token();
+    config::with_config_mut(&app_handle, |cfg| {
+        cfg.settings.cf_tunnel_mode = "quick".to_string();
+        Ok(())
+    })?;
+    apply_settings(&app_handle);
+    Ok(info(&app_handle))
+}
+
 pub fn info(app: &AppHandle) -> TunnelInfo {
     let cfg = config::load_config(app).ok();
     let enabled = cfg
         .as_ref()
         .map(|c| c.settings.web_remote_enabled && c.settings.cf_tunnel_enabled)
         .unwrap_or(false);
+    let mode = cfg
+        .as_ref()
+        .map(|c| c.settings.cf_tunnel_mode.clone())
+        .unwrap_or_else(|| "quick".to_string());
+    let hostname = cfg
+        .as_ref()
+        .map(|c| c.settings.cf_tunnel_hostname.clone())
+        .filter(|h| !h.trim().is_empty());
     let state: tauri::State<'_, TunnelState> = app.state();
     let url = state.url.lock().ok().and_then(|g| g.clone());
     let error = state.error.lock().ok().and_then(|g| g.clone());
@@ -232,7 +332,17 @@ pub fn info(app: &AppHandle) -> TunnelInfo {
         binary_found: binary.is_some(),
         binary: binary.as_ref().map(|(p, _)| p.display().to_string()),
         managed: binary.map(|(_, m)| m).unwrap_or(false),
+        mode,
+        hostname,
+        named_token_set: named_token().is_some(),
     }
+}
+
+/// True while the saved settings still ask for a tunnel.
+fn restart_intent(app: &AppHandle) -> bool {
+    config::load_config(app)
+        .map(|c| c.settings.web_remote_enabled && c.settings.cf_tunnel_enabled)
+        .unwrap_or(false)
 }
 
 /// Start/stop the tunnel to match the current settings. Safe to call often;
@@ -243,10 +353,13 @@ pub fn apply_settings(app: &AppHandle) {
     };
     let wants = cfg.settings.web_remote_enabled && cfg.settings.cf_tunnel_enabled;
     let port = cfg.settings.web_remote_port;
+    let mode = cfg.settings.cf_tunnel_mode.clone();
+    let hostname = cfg.settings.cf_tunnel_hostname.clone();
 
     let state: tauri::State<'_, TunnelState> = app.state();
     let running = state.running.load(Ordering::SeqCst);
     let active_port = state.port.lock().map(|p| *p).unwrap_or(0);
+    let active_mode = state.mode.lock().map(|m| m.clone()).unwrap_or_default();
 
     if !wants {
         if running {
@@ -254,7 +367,7 @@ pub fn apply_settings(app: &AppHandle) {
         }
         return;
     }
-    if running && active_port == port {
+    if running && active_port == port && active_mode == mode {
         return;
     }
 
@@ -274,14 +387,48 @@ pub fn apply_settings(app: &AppHandle) {
         );
         return;
     };
-    start(app, &binary, managed, port);
+
+    let token = if mode == "named" {
+        match named_token() {
+            Some(token) => token,
+            None => {
+                set_error(
+                    app,
+                    Some(
+                        "named tunnel selected but no connector token is saved — add one in settings"
+                            .into(),
+                    ),
+                );
+                return;
+            }
+        }
+    } else {
+        String::new()
+    };
+
+    start(app, &binary, managed, port, &mode, &token, &hostname);
 }
 
-fn start(app: &AppHandle, binary: &Path, managed: bool, port: u16) {
+fn start(
+    app: &AppHandle,
+    binary: &Path,
+    managed: bool,
+    port: u16,
+    mode: &str,
+    token: &str,
+    hostname: &str,
+) {
     let state: tauri::State<'_, TunnelState> = app.state();
     let generation = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
     set_error(app, None);
     set_url(app, None);
+
+    if let Ok(mut active) = state.mode.lock() {
+        *active = mode.to_string();
+    }
+    if let Ok(mut started) = state.started_at.lock() {
+        *started = Some(Instant::now());
+    }
 
     // Isolated config so a user's `~/.cloudflared/config.yml` (named tunnels)
     // can't be loaded in place of the quick tunnel. See the module docs.
@@ -297,9 +444,15 @@ fn start(app: &AppHandle, binary: &Path, managed: bool, port: u16) {
         args.push("--config".to_string());
         args.push(path.display().to_string());
     }
-    args.push("--url".to_string());
-    args.push(format!("https://localhost:{port}"));
-    args.push("--no-tls-verify".to_string());
+    if mode == "named" {
+        args.push("run".to_string());
+        args.push("--token".to_string());
+        args.push(token.to_string());
+    } else {
+        args.push("--url".to_string());
+        args.push(format!("https://localhost:{port}"));
+        args.push("--no-tls-verify".to_string());
+    }
     args.push("--no-autoupdate".to_string());
 
     let mut command = process::silent_command(binary);
@@ -328,7 +481,18 @@ fn start(app: &AppHandle, binary: &Path, managed: bool, port: u16) {
     }
     state.running.store(true, Ordering::SeqCst);
     let _ = app.emit("kern://tunnel-state", ());
-    eprintln!("[tunnel] cloudflared started ({binary:?}, managed={managed}) → https://localhost:{port}");
+    eprintln!(
+        "[tunnel] cloudflared started ({binary:?}, managed={managed}, mode={mode})"
+    );
+
+    // Named tunnels have a known public hostname; publish it immediately so
+    // the panel QR is usable without waiting for connector log lines.
+    if mode == "named" && !hostname.trim().is_empty() {
+        set_url(
+            app,
+            Some(format!("https://{}", hostname.trim().trim_end_matches('/'))),
+        );
+    }
 
     // Parse the quick-tunnel URL from cloudflared's output (stderr banner).
     if let Some(stderr) = stderr {
@@ -340,7 +504,7 @@ fn start(app: &AppHandle, binary: &Path, managed: bool, port: u16) {
         std::thread::spawn(move || consume_lines(app, generation, BufReader::new(stdout)));
     }
 
-    // Watch for exit; surface it and decide whether it was expected.
+    // Watch for exit; surface it and restart while the setting is still on.
     let app_watch = app.clone();
     std::thread::spawn(move || {
         loop {
@@ -359,12 +523,39 @@ fn start(app: &AppHandle, binary: &Path, managed: bool, port: u16) {
                 Ok(Some(status)) => {
                     let state: tauri::State<'_, TunnelState> = app_watch.state();
                     state.running.store(false, Ordering::SeqCst);
-                    if generation == state_generation(&app_watch) {
+                    if generation != state_generation(&app_watch) {
+                        return;
+                    }
+
+                    if !restart_intent(&app_watch) {
                         set_url(&app_watch, None);
-                        set_error(
-                            &app_watch,
-                            Some(format!("cloudflared exited ({status})")),
-                        );
+                        set_error(&app_watch, Some(format!("cloudflared exited ({status})")));
+                        return;
+                    }
+
+                    // Backoff, but treat a long healthy run as a fresh start.
+                    let ran_for = state
+                        .started_at
+                        .lock()
+                        .ok()
+                        .and_then(|g| *g)
+                        .map(|t| t.elapsed())
+                        .unwrap_or_default();
+                    if ran_for.as_secs() > 120 {
+                        state.restart_attempts.store(0, Ordering::SeqCst);
+                    }
+                    let attempt = state.restart_attempts.fetch_add(1, Ordering::SeqCst) + 1;
+                    let delay = Duration::from_secs((1u64 << attempt.min(5)).min(30));
+                    set_error(
+                        &app_watch,
+                        Some(format!(
+                            "cloudflared exited ({status}) — reconnecting in {}s",
+                            delay.as_secs()
+                        )),
+                    );
+                    std::thread::sleep(delay);
+                    if generation == state_generation(&app_watch) && restart_intent(&app_watch) {
+                        apply_settings(&app_watch);
                     }
                     return;
                 }
@@ -391,6 +582,8 @@ fn consume_lines(app: AppHandle, generation: u64, reader: impl BufRead) {
             let url = found.as_str().to_string();
             if current_url(&app).as_deref() != Some(url.as_str()) {
                 eprintln!("[tunnel] public url: {url}");
+                let state: tauri::State<'_, TunnelState> = app.state();
+                state.restart_attempts.store(0, Ordering::SeqCst);
                 set_url(&app, Some(url));
             }
         }
@@ -425,6 +618,7 @@ pub fn stop(app: &AppHandle) {
     let state: tauri::State<'_, TunnelState> = app.state();
     state.generation.fetch_add(1, Ordering::SeqCst);
     state.running.store(false, Ordering::SeqCst);
+    state.restart_attempts.store(0, Ordering::SeqCst);
     let child = state.child.lock().ok().and_then(|mut guard| guard.take());
     if let Some(child) = child {
         if let Ok(mut guard) = child.lock() {
@@ -471,5 +665,14 @@ mod tests {
             Some("https://random-words-here.trycloudflare.com")
         );
         assert!(pattern.find("no url here").is_none());
+    }
+
+    #[test]
+    fn backed_off_restart_delay_is_bounded() {
+        for attempt in 1..=10u32 {
+            let delay = Duration::from_secs((1u64 << attempt.min(5)).min(30));
+            assert!(delay >= Duration::from_secs(2));
+            assert!(delay <= Duration::from_secs(30));
+        }
     }
 }

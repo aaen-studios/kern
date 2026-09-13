@@ -36,6 +36,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   webRemoteEnabled: false,
   webRemotePort: 7440,
   cfTunnelEnabled: false,
+  cfTunnelMode: "quick",
+  cfTunnelHostname: "",
   cfTunnelUrl: "",
   webRemotePassphrase: "",
   syncRepoUrl: "",

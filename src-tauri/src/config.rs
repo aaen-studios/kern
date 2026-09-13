@@ -67,10 +67,19 @@ pub struct AppSettings {
     /// HTTPS port for the web remote.
     #[serde(default = "default_web_remote_port")]
     pub web_remote_port: u16,
-    /// Expose the web remote publicly through a Cloudflare quick tunnel
+    /// Expose the web remote publicly through a Cloudflare tunnel
     /// (`cloudflared`). Off by default; a public URL is a public credential.
     #[serde(default)]
     pub cf_tunnel_enabled: bool,
+    /// Tunnel flavour when enabled: `"quick"` (random `*.trycloudflare.com`
+    /// URL, no account) or `"named"` (token-based connector with a stable
+    /// hostname configured in the Cloudflare dashboard).
+    #[serde(default = "default_tunnel_mode")]
+    pub cf_tunnel_mode: String,
+    /// Public hostname for named tunnels (display + QR only — the connector
+    /// itself learns the route from the Cloudflare dashboard).
+    #[serde(default)]
+    pub cf_tunnel_hostname: String,
     /// Last quick-tunnel URL reported by cloudflared (host-managed, shown in
     /// the settings panel while the tunnel reconnects).
     #[serde(default)]
@@ -134,6 +143,10 @@ fn default_registry_url() -> String {
 
 fn default_web_remote_port() -> u16 {
     7440
+}
+
+fn default_tunnel_mode() -> String {
+    "quick".to_string()
 }
 
 /// Per-instance backup schedule.
@@ -441,6 +454,8 @@ fn default_config(app_handle: &AppHandle) -> Result<AppConfig, String> {
             web_remote_enabled: false,
             web_remote_port: default_web_remote_port(),
             cf_tunnel_enabled: false,
+            cf_tunnel_mode: default_tunnel_mode(),
+            cf_tunnel_hostname: String::new(),
             cf_tunnel_url: String::new(),
             web_remote_passphrase: String::new(),
             sync_repo_url: String::new(),

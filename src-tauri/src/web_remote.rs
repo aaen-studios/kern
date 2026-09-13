@@ -1,25 +1,30 @@
-//! Optional web remote — self-signed HTTPS + token pairing + a mobile-first
-//! control UI.
+//! Optional web remote — self-signed HTTPS + pairing + a mobile-first
+//! control panel.
 //!
-//! Design decisions (per product spec):
+//! Design decisions:
 //!   - Served over **HTTPS** with a self-signed certificate generated on first
 //!     run (stored under `<app_data>/web_remote/`), so the browser treats it
-//!     as a secure context.
-//!   - **Token auth**, not a passphrase: a random 48-hex token is generated
-//!     once and kept in the OS credential vault; the desktop shows a QR code
-//!     that embeds it for one-scan pairing.
-//!   - Bound to the LAN (`0.0.0.0:<port>`), enabled explicitly in Settings.
-//!
-//! The web UI is a purpose-built mobile page (server cards, start/stop/
-//! restart, live log tail) rather than the desktop React app — the desktop UI
-//! depends on the Tauri IPC bridge, which a browser doesn't have.
+//!     as a secure context. Via the Cloudflare tunnel the edge terminates
+//!     TLS with a real certificate.
+//!   - **Pairing + device tokens**, not a single shared secret: the desktop
+//!     generates single-use invite codes; redeeming one creates a named device
+//!     token with a role (`admin`/`operator`/`viewer`) and optional per-server
+//!     scope. The original keyring token keeps working as the owner (admin).
+//!     See `remote_auth`.
+//!   - The panel is a purpose-built static app (`src-tauri/remote/`, embedded
+//!     into the binary) rather than the desktop React app — the desktop UI
+//!     depends on the Tauri IPC bridge, which a browser doesn't have.
+//!   - The API is the same router the loopback automation API uses
+//!     (`automation_api::route`), gated by a per-route scope policy. One
+//!     implementation, no drift between CLI, desktop, and panel.
 
-use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{TcpListener, UdpSocket};
+use std::collections::HashMap;
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::net::{SocketAddr, TcpListener, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer, PrivateKeyDer};
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
@@ -28,16 +33,31 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::config;
 use crate::metrics::MetricsState;
 use crate::process;
+use crate::remote_auth::{self, AuthContext, Scope};
 
 const KEYRING_SERVICE: &str = "kern.webremote";
 const KEYRING_USER: &str = "token";
 
 /// Maximum request line / header size accepted (bytes).
 const MAX_HEADER_BYTES: u64 = 8 * 1024;
+/// Maximum JSON request body (bytes).
+const MAX_BODY_BYTES: u64 = 2 * 1024 * 1024;
+/// Maximum single upload (bytes).
+const MAX_UPLOAD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 /// Maximum simultaneously handled connections.
-const MAX_CONNECTIONS: usize = 48;
-/// Maximum bytes read from latest.log for a tail request.
+const MAX_CONNECTIONS: usize = 64;
+/// Maximum bytes read from latest.log for the initial console tail.
 const MAX_LOG_BYTES: u64 = 2 * 1024 * 1024;
+/// Console follow read cap per poll (bytes).
+const FOLLOW_READ_BYTES: u64 = 256 * 1024;
+/// Console initial tail line count.
+const CONSOLE_TAIL_LINES: usize = 200;
+/// How long one SSE stream may stay open before the client must reconnect.
+const STREAM_MAX_SECS: u64 = 12 * 3600;
+/// Auth failures per IP before a cool-down.
+const AUTH_FAILURE_LIMIT: u32 = 10;
+/// Cool-down window for repeated auth failures.
+const AUTH_FAILURE_WINDOW: Duration = Duration::from_secs(300);
 
 /// Shared remote state (token cache + live status for the Settings UI).
 #[derive(Default)]
@@ -47,6 +67,8 @@ pub struct WebRemoteState {
     pub port: Mutex<u16>,
     /// Invalidates the accept loop when settings change (start/stop/restart).
     generation: std::sync::atomic::AtomicU64,
+    /// Failed auth attempts keyed by peer ip.
+    auth_failures: Mutex<HashMap<String, (u32, Instant)>>,
 }
 
 /// Brings the web remote up/down to match the saved settings. Safe to call on
@@ -168,7 +190,7 @@ pub struct WebRemoteInfo {
     pub token: String,
     pub urls: Vec<String>,
     pub qr_svg: String,
-    /// Cloudflare quick-tunnel status (see [`crate::tunnel`]).
+    /// Cloudflare tunnel status (see [`crate::tunnel`]).
     pub tunnel: crate::tunnel::TunnelInfo,
     /// Pairing QR for the public tunnel URL (empty until the tunnel is up).
     pub tunnel_qr_svg: String,
@@ -229,6 +251,12 @@ fn build_info(app_handle: &AppHandle) -> Result<WebRemoteInfo, String> {
 #[tauri::command]
 pub fn web_remote_info(app_handle: AppHandle) -> Result<WebRemoteInfo, String> {
     build_info(&app_handle)
+}
+
+/// Renders any string as a QR SVG (used by the settings UI for invite links).
+#[tauri::command]
+pub fn web_remote_qr(text: String) -> String {
+    qr_svg_for(&text)
 }
 
 /// Rotates the access token (invalidates every paired device).
@@ -318,7 +346,7 @@ fn serve(handle: &AppHandle, port: u16, generation: u64) {
         let state: tauri::State<'_, WebRemoteState> = handle.state();
         state.running.store(true, Ordering::SeqCst);
     }
-    eprintln!("[web-remote] listening on https://0.0.0.0:{port} (token required)");
+    eprintln!("[web-remote] listening on https://0.0.0.0:{port} (paired devices only)");
     let _ = handle.emit("kern://web-remote-state", ());
 
     let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -328,14 +356,14 @@ fn serve(handle: &AppHandle, port: u16, generation: u64) {
             break;
         }
         match listener.accept() {
-            Ok((tcp, _)) => {
+            Ok((tcp, peer)) => {
                 let _ = tcp.set_nonblocking(false);
                 let current = active.load(Ordering::SeqCst);
                 if current >= MAX_CONNECTIONS {
                     continue; // shed load; the handshake would fail anyway
                 }
                 let _ = tcp.set_read_timeout(Some(Duration::from_secs(10)));
-                let _ = tcp.set_write_timeout(Some(Duration::from_secs(10)));
+                let _ = tcp.set_write_timeout(Some(Duration::from_secs(30)));
                 let tls = tls.clone();
                 let h = handle.clone();
                 let active = active.clone();
@@ -343,7 +371,7 @@ fn serve(handle: &AppHandle, port: u16, generation: u64) {
                 std::thread::spawn(move || {
                     if let Ok(conn) = ServerConnection::new(tls) {
                         let stream = StreamOwned::new(conn, tcp);
-                        let _ = handle_conn(&h, stream);
+                        let _ = handle_conn(&h, stream, peer);
                     }
                     active.fetch_sub(1, Ordering::SeqCst);
                 });
@@ -362,7 +390,11 @@ fn serve(handle: &AppHandle, port: u16, generation: u64) {
 }
 
 /// Reads one line into `out`, stopping once `cap` bytes have been consumed.
-pub(crate) fn read_line_capped<R: BufRead>(reader: &mut R, out: &mut String, cap: u64) -> std::io::Result<u64> {
+pub(crate) fn read_line_capped<R: BufRead>(
+    reader: &mut R,
+    out: &mut String,
+    cap: u64,
+) -> std::io::Result<u64> {
     let mut buf: Vec<u8> = Vec::new();
     let mut total: u64 = 0;
     loop {
@@ -393,73 +425,1085 @@ pub(crate) fn read_line_capped<R: BufRead>(reader: &mut R, out: &mut String, cap
     Ok(total)
 }
 
-fn handle_conn<S: Read + Write>(handle: &AppHandle, mut stream: S) -> std::io::Result<()> {
-    let mut request_line = String::new();
-    let mut auth_header: Option<String> = None;
-    let method;
-    let target;
-    {
-        let mut reader = BufReader::new(&mut stream);
-        let read = read_line_capped(&mut reader, &mut request_line, MAX_HEADER_BYTES)?;
-        if read == 0 || read >= MAX_HEADER_BYTES || !request_line.ends_with('\n') {
-            return respond(&mut stream, 400, "application/json", &err("bad request"));
-        }
-        let mut header_bytes = read;
-        loop {
-            let mut header = String::new();
-            let n = read_line_capped(&mut reader, &mut header, MAX_HEADER_BYTES)?;
-            header_bytes += n;
-            if n == 0 || header == "\r\n" || header == "\n" {
-                break;
-            }
-            if header_bytes >= MAX_HEADER_BYTES {
-                return respond(&mut stream, 431, "application/json", &err("headers too large"));
-            }
-            if header.to_ascii_lowercase().starts_with("authorization:") {
-                auth_header = header.split(':').nth(1).map(|v| v.trim().to_string());
-            }
-        }
-        let parts: Vec<&str> = request_line.split_whitespace().collect();
-        method = parts.first().copied().unwrap_or("").to_string();
-        target = parts.get(1).copied().unwrap_or("").to_string();
-    }
+// ---------------------------------------------------------------------------
+// Request handling
+// ---------------------------------------------------------------------------
 
-    let path = target.split('?').next().unwrap_or(&target).to_string();
-    let query_token = target
-        .split_once("?")
-        .and_then(|(_, q)| {
-            q.split('&')
-                .filter_map(|pair| pair.split_once('='))
-                .find(|(k, _)| *k == "token")
-                .map(|(_, v)| v.to_string())
-        });
-
-    let provided = auth_header
-        .as_deref()
-        .map(|h| h.strip_prefix("Bearer ").unwrap_or(h).trim().to_string())
-        .or(query_token);
-    if !check_auth(handle, provided.as_deref()) {
-        return respond(
-            &mut stream,
-            401,
-            "application/json",
-            r#"{"error":"unauthorized","hint":"pair via the QR code or send Authorization: Bearer <token>"}"#,
-        );
-    }
-
-    let (status, content_type, body) = route(handle, &method, &path);
-    respond(&mut stream, status, content_type, &body)
+struct RequestHead {
+    method: String,
+    target: String,
+    auth_header: Option<String>,
+    content_length: Option<u64>,
 }
 
-/// Constant-time token comparison.
-pub(crate) fn check_auth(handle: &AppHandle, provided: Option<&str>) -> bool {
-    let Some(expected) = current_token(handle) else {
+/// Outcome of the header/body phase. Response writing happens after the
+/// BufReader drops, so the raw stream is free again.
+enum Phase {
+    Ready {
+        method: String,
+        path: String,
+        query: String,
+        body: String,
+        auth: AuthContext,
+    },
+    Asset {
+        content_type: &'static str,
+        bytes: Vec<u8>,
+    },
+    Json {
+        status: u16,
+        body: String,
+    },
+    Uploaded {
+        bytes: u64,
+    },
+    Console {
+        id: String,
+        auth: AuthContext,
+    },
+    Events {
+        auth: AuthContext,
+    },
+    Download {
+        id: String,
+        query: String,
+        auth: AuthContext,
+    },
+    Fail {
+        status: u16,
+        message: &'static str,
+        auth_failure: bool,
+    },
+}
+
+fn handle_conn<S: Read + Write>(
+    handle: &AppHandle,
+    mut stream: S,
+    peer: SocketAddr,
+) -> std::io::Result<()> {
+    let peer_key = peer.ip().to_string();
+
+    // Header + body phase. The BufReader borrows the stream, so everything
+    // that touches the body happens in `handle_request`; responses are written
+    // after the reader drops.
+    let phase = {
+        let mut reader = BufReader::new(&mut stream);
+        handle_request(handle, &mut reader, &peer_key)
+    };
+
+    match phase {
+        Phase::Ready {
+            method,
+            path,
+            query,
+            body,
+            auth,
+        } => {
+            let (status, content_type, response) =
+                dispatch(handle, &method, &path, &query, &body, &auth);
+            respond(&mut stream, status, content_type, &response)
+        }
+        Phase::Asset {
+            content_type,
+            bytes,
+        } => respond_bytes(&mut stream, 200, content_type, &bytes),
+        Phase::Json { status, body } => {
+            respond(&mut stream, status, "application/json", &body)
+        }
+        Phase::Uploaded { bytes } => respond(
+            &mut stream,
+            200,
+            "application/json",
+            &serde_json::json!({ "ok": true, "bytes": bytes }).to_string(),
+        ),
+        Phase::Console { id, auth } => console_stream(handle, &mut stream, &auth, &id),
+        Phase::Events { auth } => events_stream(handle, &mut stream, &auth),
+        Phase::Download { id, query, auth } => {
+            download_file(handle, &mut stream, &auth, &id, &query)
+        }
+        Phase::Fail {
+            status,
+            message,
+            auth_failure,
+        } => {
+            if auth_failure {
+                note_auth_failure(handle, &peer_key);
+            }
+            fail(stream, (status, message))
+        }
+    }
+}
+
+fn handle_request<R: BufRead>(
+    handle: &AppHandle,
+    reader: &mut R,
+    peer_key: &str,
+) -> Phase {
+    let head = match parse_head(reader) {
+        Ok(head) => head,
+        Err((status, message, _)) => {
+            return Phase::Fail {
+                status,
+                message,
+                auth_failure: false,
+            }
+        }
+    };
+    let path = head.target.split('?').next().unwrap_or("").to_string();
+    let query = head
+        .target
+        .split_once('?')
+        .map(|(_, q)| q.to_string())
+        .unwrap_or_default();
+
+    // Public surface: the panel shell, assets, health, pairing.
+    if is_public_path(&head.method, &path) {
+        match (head.method.as_str(), path.as_str()) {
+            ("POST", "/api/pair") => {
+                let body = match read_body(reader, head.content_length) {
+                    Ok(b) => b,
+                    Err((status, message)) => {
+                        return Phase::Fail {
+                            status,
+                            message,
+                            auth_failure: false,
+                        }
+                    }
+                };
+                if is_rate_limited(handle, peer_key) {
+                    return Phase::Fail {
+                        status: 429,
+                        message: "too many attempts — wait a few minutes",
+                        auth_failure: false,
+                    };
+                }
+                let (status, body) = pair_device(handle, &body);
+                if status >= 400 {
+                    note_auth_failure(handle, peer_key);
+                }
+                return Phase::Json { status, body };
+            }
+            ("GET", "/api/invite") => {
+                let code = query_value(&query, "code").unwrap_or_default();
+                let (status, body) = invite_preview(handle, &code);
+                return Phase::Json { status, body };
+            }
+            ("GET", "/health") => {
+                return Phase::Json {
+                    status: 200,
+                    body: r#"{"status":"ok"}"#.to_string(),
+                }
+            }
+            ("GET", _) => {
+                if let Some((content_type, bytes)) = asset(&path) {
+                    return Phase::Asset {
+                        content_type,
+                        bytes,
+                    };
+                }
+                return Phase::Fail {
+                    status: 404,
+                    message: "not found",
+                    auth_failure: false,
+                };
+            }
+            _ => {
+                return Phase::Fail {
+                    status: 404,
+                    message: "not found",
+                    auth_failure: false,
+                }
+            }
+        }
+    }
+
+    // Everything else needs an identity.
+    let auth = match resolve_auth(handle, provided_token(&head, &query)) {
+        Some(auth) => auth,
+        None => {
+            return Phase::Fail {
+                status: 401,
+                message: "unauthorized — pair this device from kern settings",
+                auth_failure: true,
+            }
+        }
+    };
+    note_auth_success(handle, peer_key);
+
+    // Streaming + binary endpoints need the raw stream, not a buffered body.
+    let seg = segments(&path);
+    match (head.method.as_str(), seg.as_slice()) {
+        ("GET", ["api", "servers", id, "console"]) => Phase::Console {
+            id: id.to_string(),
+            auth,
+        },
+        ("GET", ["api", "events"]) => Phase::Events { auth },
+        ("GET", ["api", "servers", id, "download"]) => Phase::Download {
+            id: id.to_string(),
+            query,
+            auth,
+        },
+        ("POST", ["api", "servers", id, "upload"]) => {
+            let rel = query_value(&query, "path").unwrap_or_default();
+            match stream_upload(reader, handle, &auth, id, rel, head.content_length) {
+                Ok(bytes) => Phase::Uploaded { bytes },
+                Err((status, message)) => Phase::Fail {
+                    status,
+                    message,
+                    auth_failure: false,
+                },
+            }
+        }
+        _ => {
+            let body = match read_body(reader, head.content_length) {
+                Ok(b) => b,
+                Err((status, message)) => {
+                    return Phase::Fail {
+                        status,
+                        message,
+                        auth_failure: false,
+                    }
+                }
+            };
+            Phase::Ready {
+                method: head.method,
+                path,
+                query,
+                body,
+                auth,
+            }
+        }
+    }
+}
+
+fn parse_head<R: BufRead>(reader: &mut R) -> Result<RequestHead, (u16, &'static str, &'static str)> {
+    let mut request_line = String::new();
+    let read = read_line_capped(reader, &mut request_line, MAX_HEADER_BYTES)
+        .map_err(|_| (400, "bad request", ""))?;
+    if read == 0 || read >= MAX_HEADER_BYTES || !request_line.ends_with('\n') {
+        return Err((400, "bad request", ""));
+    }
+    let mut auth_header: Option<String> = None;
+    let mut content_length: Option<u64> = None;
+    let mut header_bytes = read;
+    loop {
+        let mut header = String::new();
+        let n = read_line_capped(reader, &mut header, MAX_HEADER_BYTES)
+            .map_err(|_| (400, "bad request", ""))?;
+        header_bytes += n;
+        if n == 0 || header == "\r\n" || header == "\n" {
+            break;
+        }
+        if header_bytes >= MAX_HEADER_BYTES {
+            return Err((431, "headers too large", ""));
+        }
+        let lower = header.to_ascii_lowercase();
+        if lower.starts_with("authorization:") {
+            auth_header = header.split(':').nth(1).map(|v| v.trim().to_string());
+        } else if lower.starts_with("content-length:") {
+            content_length = header
+                .split(':')
+                .nth(1)
+                .and_then(|v| v.trim().parse::<u64>().ok());
+        }
+    }
+    let parts: Vec<&str> = request_line.split_whitespace().collect();
+    Ok(RequestHead {
+        method: parts.first().copied().unwrap_or("").to_string(),
+        target: parts.get(1).copied().unwrap_or("").to_string(),
+        auth_header,
+        content_length,
+    })
+}
+
+fn read_body<R: BufRead>(reader: &mut R, length: Option<u64>) -> Result<String, (u16, &'static str)> {
+    let Some(len) = length else {
+        return Ok(String::new());
+    };
+    if len > MAX_BODY_BYTES {
+        return Err((413, "body too large"));
+    }
+    let mut buf = vec![0u8; len as usize];
+    reader
+        .read_exact(&mut buf)
+        .map_err(|_| (400, "incomplete body"))?;
+    Ok(String::from_utf8_lossy(&buf).to_string())
+}
+
+fn provided_token(head: &RequestHead, query: &str) -> Option<String> {
+    head.auth_header
+        .as_deref()
+        .map(|h| h.strip_prefix("Bearer ").unwrap_or(h).trim().to_string())
+        .or_else(|| query_value(query, "token"))
+}
+
+fn resolve_auth(handle: &AppHandle, provided: Option<String>) -> Option<AuthContext> {
+    let provided = provided?;
+    if provided.trim().is_empty() {
+        return None;
+    }
+    // Owner: the keyring token keeps working as an implicit admin.
+    if let Some(expected) = current_token(handle) {
+        if constant_eq(provided.trim().as_bytes(), expected.as_bytes()) {
+            return Some(remote_auth::owner_context());
+        }
+    }
+    // Managed devices: users + scoped roles.
+    remote_auth::authenticate(handle, provided.trim())
+}
+
+fn is_rate_limited(handle: &AppHandle, ip: &str) -> bool {
+    let state: tauri::State<'_, WebRemoteState> = handle.state();
+    let Ok(map) = state.auth_failures.lock() else {
         return false;
     };
-    let Some(provided) = provided else {
-        return false;
+    match map.get(ip) {
+        Some((count, at)) if at.elapsed() < AUTH_FAILURE_WINDOW => *count >= AUTH_FAILURE_LIMIT,
+        _ => false,
+    }
+}
+
+fn note_auth_failure(handle: &AppHandle, ip: &str) {
+    let state: tauri::State<'_, WebRemoteState> = handle.state();
+    if let Ok(mut map) = state.auth_failures.lock() {
+        let entry = map.entry(ip.to_string()).or_insert((0, Instant::now()));
+        if entry.1.elapsed() >= AUTH_FAILURE_WINDOW {
+            *entry = (1, Instant::now());
+        } else {
+            entry.0 += 1;
+        }
     };
-    constant_eq(provided.as_bytes(), expected.as_bytes())
+}
+
+fn note_auth_success(handle: &AppHandle, ip: &str) {
+    let state: tauri::State<'_, WebRemoteState> = handle.state();
+    if let Ok(mut map) = state.auth_failures.lock() {
+        map.remove(ip);
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Public endpoints: pairing, session, assets
+// ---------------------------------------------------------------------------
+
+fn is_public_path(method: &str, path: &str) -> bool {
+    matches!(
+        (method, path),
+        ("GET", "/")
+            | ("GET", "/index.html")
+            | ("GET", "/app.css")
+            | ("GET", "/app.js")
+            | ("GET", "/sw.js")
+            | ("GET", "/manifest.webmanifest")
+            | ("GET", "/icon-128.png")
+            | ("GET", "/icon-32.png")
+            | ("GET", "/favicon.ico")
+            | ("GET", "/favicon.png")
+            | ("GET", "/health")
+            | ("GET", "/api/invite")
+            | ("POST", "/api/pair")
+    )
+}
+
+fn pair_device(handle: &AppHandle, body: &str) -> (u16, String) {
+    let parsed: serde_json::Value = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(_) => return (400, err("invalid JSON body")),
+    };
+    let Some(code) = parsed.get("code").and_then(|v| v.as_str()) else {
+        return (400, err("code is required"));
+    };
+    let device = parsed
+        .get("device")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown device");
+    match remote_auth::redeem_invite(handle, code, device) {
+        Ok((context, token)) => (
+            200,
+            serde_json::json!({ "token": token, "user": context }).to_string(),
+        ),
+        Err(e) => (401, err(&e)),
+    }
+}
+
+fn invite_preview(handle: &AppHandle, code: &str) -> (u16, String) {
+    if code.trim().is_empty() {
+        return (400, err("code is required"));
+    }
+    match remote_auth::invite_info(handle, code) {
+        Ok(info) => (200, serde_json::to_string(&info).unwrap_or_default()),
+        Err(e) => (404, err(&e)),
+    }
+}
+
+fn fail<S: Write>(mut stream: S, (status, message): (u16, &'static str)) -> std::io::Result<()> {
+    let body = err(message);
+    respond(&mut stream, status, "application/json", &body)
+}
+
+/// Loads a panel asset. Debug builds read from `src-tauri/remote/` so edits
+/// don't need a rebuild; release builds use the embedded copies.
+fn asset(path: &str) -> Option<(&'static str, Vec<u8>)> {
+    let (name, content_type): (&str, &'static str) = match path {
+        "/" | "/index.html" => ("index.html", "text/html; charset=utf-8"),
+        "/app.css" => ("app.css", "text/css; charset=utf-8"),
+        "/app.js" => ("app.js", "application/javascript; charset=utf-8"),
+        "/sw.js" => ("sw.js", "application/javascript; charset=utf-8"),
+        "/manifest.webmanifest" => ("manifest.webmanifest", "application/manifest+json"),
+        "/icon-128.png" => ("icon-128.png", "image/png"),
+        "/icon-32.png" => ("icon-32.png", "image/png"),
+        "/favicon.ico" | "/favicon.png" => ("icon-32.png", "image/png"),
+        _ => return None,
+    };
+
+    #[cfg(debug_assertions)]
+    {
+        let disk = Path::new(env!("CARGO_MANIFEST_DIR")).join("remote").join(name);
+        if let Ok(bytes) = std::fs::read(&disk) {
+            return Some((content_type, bytes));
+        }
+    }
+
+    let embedded: &'static [u8] = match name {
+        "index.html" => include_bytes!("../remote/index.html"),
+        "app.css" => include_bytes!("../remote/app.css"),
+        "app.js" => include_bytes!("../remote/app.js"),
+        "sw.js" => include_bytes!("../remote/sw.js"),
+        "manifest.webmanifest" => include_bytes!("../remote/manifest.webmanifest"),
+        "icon-128.png" => include_bytes!("../icons/128x128.png"),
+        "icon-32.png" => include_bytes!("../icons/32x32.png"),
+        _ => return None,
+    };
+    Some((content_type, embedded.to_vec()))
+}
+
+// ---------------------------------------------------------------------------
+// API dispatch: scope policy + automation router
+// ---------------------------------------------------------------------------
+
+fn segments(path: &str) -> Vec<&str> {
+    path.trim_matches('/')
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+fn query_value(query: &str, key: &str) -> Option<String> {
+    query
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .find(|(k, _)| *k == key)
+        .map(|(_, v)| percent_decode(v))
+}
+
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hi = (bytes[i + 1] as char).to_digit(16);
+            let lo = (bytes[i + 2] as char).to_digit(16);
+            if let (Some(hi), Some(lo)) = (hi, lo) {
+                out.push((hi * 16 + lo) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        if bytes[i] == b'+' {
+            out.push(b' ');
+        } else {
+            out.push(bytes[i]);
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).to_string()
+}
+
+/// Minimum scope required for a route. Unknown routes default to admin so a
+/// new API endpoint can never leak to a viewer by accident.
+fn required_scope(method: &str, seg: &[&str]) -> Scope {
+    use Scope::*;
+    match (method, seg) {
+        ("GET", ["status"]) | ("GET", ["health"]) => View,
+        ("GET", ["servers"]) => View,
+        ("GET", ["servers", _]) => View,
+        (
+            "GET",
+            [
+                "servers",
+                _,
+                "log" | "metrics" | "energy" | "preflight" | "crash" | "tasks" | "backups"
+                | "files" | "file",
+            ],
+        ) => View,
+        ("GET", ["host", "metrics"]) => View,
+        ("GET", ["inspect"]) => View,
+        ("GET", ["plugins"]) => View,
+        ("GET", ["audit"]) => View,
+        ("GET", ["events"]) => View,
+        ("POST", ["servers", _, "stdin"]) => Control,
+        ("POST", ["servers", _, "start" | "stop" | "restart" | "install"]) => Control,
+        ("POST", ["servers", _, "backup"]) => Control,
+        ("POST", ["servers", _, "tasks", _, "run"]) => Control,
+        ("POST", ["servers", _, "backups", _, "restore"]) => Control,
+        ("DELETE", ["servers", _, "backups", _]) => Control,
+        ("PUT", ["servers", _, "file"]) => Control,
+        ("POST", ["servers", _, "files"]) => Control,
+        // Creating/removing instances, installing plugins: admin only.
+        ("POST", ["servers"]) => Admin,
+        ("PATCH", ["servers", _]) => Admin,
+        ("DELETE", ["servers", _]) => Admin,
+        ("POST", ["plugins", "install" | "validate"]) => Admin,
+        ("DELETE", ["plugins", _]) => Admin,
+        ("POST", ["plugins", _]) | ("GET", ["plugins", _]) => Admin,
+        _ => Admin,
+    }
+}
+
+fn dispatch(
+    handle: &AppHandle,
+    method: &str,
+    path: &str,
+    query: &str,
+    body: &str,
+    auth: &AuthContext,
+) -> (u16, &'static str, String) {
+    // Panel management endpoints live under /api/remote/* and never touch the
+    // automation router.
+    if let Some(rest) = path.strip_prefix("/api/remote") {
+        return remote_admin(handle, method, rest, body, auth);
+    }
+
+    let Some(api_path) = path.strip_prefix("/api") else {
+        return (404, "application/json", err("not found"));
+    };
+    let api_seg = segments(api_path);
+
+    let needed = required_scope(method, &api_seg);
+    if !auth.allows_scope(needed) {
+        return (
+            403,
+            "application/json",
+            err("your role doesn't allow this action"),
+        );
+    }
+    if let ["servers", id, ..] = api_seg.as_slice() {
+        if !id.is_empty() && !auth.allows_server(id) {
+            return (
+                403,
+                "application/json",
+                err("this device isn't scoped to that server"),
+            );
+        }
+    }
+
+    let (status, content_type, response) = crate::automation_api::route(handle, method, api_path, query, body);
+
+    // Attribute every successful mutation in the audit log.
+    if matches!(method, "POST" | "PUT" | "PATCH" | "DELETE") && status < 400 {
+        let server_id = match api_seg.as_slice() {
+            ["servers", id, ..] if !id.is_empty() => Some(*id),
+            _ => None,
+        };
+        let detail = format!("{method} {api_path} by {}", auth.name);
+        crate::audit::record(handle, "remote", &detail, server_id);
+    }
+
+    (status, content_type, response)
+}
+
+/// Panel-specific administration: session info, remote status, people,
+/// invites, tunnel toggle.
+fn remote_admin(
+    handle: &AppHandle,
+    method: &str,
+    rest: &str,
+    body: &str,
+    auth: &AuthContext,
+) -> (u16, &'static str, String) {
+    let seg = segments(rest);
+    let json = |v: serde_json::Value| (200, "application/json", v.to_string());
+
+    match (method, seg.as_slice()) {
+        ("GET", ["session"]) => json(serde_json::json!({ "user": auth })),
+        ("GET", ["status"]) => {
+            let tunnel = crate::tunnel::info(handle);
+            let cfg = config::load_config(handle).ok();
+            json(serde_json::json!({
+                "version": env!("CARGO_PKG_VERSION"),
+                "tunnel": tunnel,
+                "registryUrl": cfg.as_ref().map(|c| c.settings.registry_url.clone()),
+            }))
+        }
+        ("POST", ["tunnel"]) => {
+            if !auth.allows_scope(Scope::Admin) {
+                return (403, "application/json", err("admins only"));
+            }
+            let parsed: serde_json::Value = match serde_json::from_str(body) {
+                Ok(v) => v,
+                Err(_) => return (400, "application/json", err("invalid JSON body")),
+            };
+            let Some(enabled) = parsed.get("enabled").and_then(|v| v.as_bool()) else {
+                return (400, "application/json", err("enabled is required"));
+            };
+            if let Err(e) = config::with_config_mut(handle, |cfg| {
+                cfg.settings.cf_tunnel_enabled = enabled;
+                Ok(())
+            }) {
+                return (500, "application/json", err(&e));
+            }
+            crate::tunnel::apply_settings(handle);
+            crate::audit::record(
+                handle,
+                "remote",
+                &format!("tunnel {}", if enabled { "on" } else { "off" }),
+                None,
+            );
+            let tunnel = crate::tunnel::info(handle);
+            json(serde_json::json!({ "tunnel": tunnel }))
+        }
+        ("GET", ["people"]) => {
+            if !auth.allows_scope(Scope::Admin) {
+                return (403, "application/json", err("admins only"));
+            }
+            match remote_auth::people(handle) {
+                Ok(people) => (200, "application/json", serde_json::to_string(&people).unwrap_or_default()),
+                Err(e) => (500, "application/json", err(&e)),
+            }
+        }
+        ("POST", ["invites"]) => {
+            if !auth.allows_scope(Scope::Admin) {
+                return (403, "application/json", err("admins only"));
+            }
+            let parsed: serde_json::Value = match serde_json::from_str(body) {
+                Ok(v) => v,
+                Err(_) => return (400, "application/json", err("invalid JSON body")),
+            };
+            let name = parsed.get("name").and_then(|v| v.as_str()).unwrap_or("guest");
+            let role = parsed.get("role").and_then(|v| v.as_str()).unwrap_or("viewer");
+            let servers = parsed.get("servers").and_then(|v| v.as_array()).map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect::<Vec<_>>()
+            });
+            let ttl = parsed.get("ttlSecs").and_then(|v| v.as_u64());
+            match remote_auth::create_invite(handle, name, role, servers, ttl) {
+                Ok(invite) => {
+                    crate::audit::record(
+                        handle,
+                        "remote",
+                        &format!("invite created for {} ({})", invite.name, role),
+                        None,
+                    );
+                    (201, "application/json", serde_json::to_string(&invite).unwrap_or_default())
+                }
+                Err(e) => (400, "application/json", err(&e)),
+            }
+        }
+        ("POST", ["invites", "revoke"]) => {
+            if !auth.allows_scope(Scope::Admin) {
+                return (403, "application/json", err("admins only"));
+            }
+            let parsed: serde_json::Value = match serde_json::from_str(body) {
+                Ok(v) => v,
+                Err(_) => return (400, "application/json", err("invalid JSON body")),
+            };
+            let Some(code) = parsed.get("code").and_then(|v| v.as_str()) else {
+                return (400, "application/json", err("code is required"));
+            };
+            match remote_auth::revoke_invite(handle, code) {
+                Ok(()) => json(serde_json::json!({ "ok": true })),
+                Err(e) => (404, "application/json", err(&e)),
+            }
+        }
+        ("POST", ["devices", "revoke"]) => {
+            if !auth.allows_scope(Scope::Admin) {
+                return (403, "application/json", err("admins only"));
+            }
+            let parsed: serde_json::Value = match serde_json::from_str(body) {
+                Ok(v) => v,
+                Err(_) => return (400, "application/json", err("invalid JSON body")),
+            };
+            let Some(id) = parsed.get("id").and_then(|v| v.as_str()) else {
+                return (400, "application/json", err("id is required"));
+            };
+            match remote_auth::revoke_device(handle, id) {
+                Ok(()) => json(serde_json::json!({ "ok": true })),
+                Err(e) => (404, "application/json", err(&e)),
+            }
+        }
+        ("POST", ["users", "remove"]) => {
+            if !auth.allows_scope(Scope::Admin) {
+                return (403, "application/json", err("admins only"));
+            }
+            let parsed: serde_json::Value = match serde_json::from_str(body) {
+                Ok(v) => v,
+                Err(_) => return (400, "application/json", err("invalid JSON body")),
+            };
+            let Some(id) = parsed.get("id").and_then(|v| v.as_str()) else {
+                return (400, "application/json", err("id is required"));
+            };
+            match remote_auth::remove_user(handle, id) {
+                Ok(()) => json(serde_json::json!({ "ok": true })),
+                Err(e) => (404, "application/json", err(&e)),
+            }
+        }
+        _ => (404, "application/json", err("not found")),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Streaming endpoints
+// ---------------------------------------------------------------------------
+
+fn write_chunk<S: Write>(stream: &mut S, data: &[u8]) -> std::io::Result<()> {
+    write!(stream, "{:x}\r\n", data.len())?;
+    stream.write_all(data)?;
+    stream.write_all(b"\r\n")?;
+    stream.flush()
+}
+
+fn write_chunk_end<S: Write>(stream: &mut S) -> std::io::Result<()> {
+    stream.write_all(b"0\r\n\r\n")?;
+    stream.flush()
+}
+
+fn sse_event<S: Write>(stream: &mut S, event: &str, data: &str) -> std::io::Result<()> {
+    let frame = format!("event: {event}\ndata: {data}\n\n");
+    write_chunk(stream, frame.as_bytes())
+}
+
+fn start_stream<S: Write>(stream: &mut S, content_type: &str) -> std::io::Result<()> {
+    let headers = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nCache-Control: no-store\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+    );
+    stream.write_all(headers.as_bytes())?;
+    stream.flush()
+}
+
+fn instance_log_path(handle: &AppHandle, id: &str) -> Option<PathBuf> {
+    let cfg = config::load_config(handle).ok()?;
+    let instance = cfg.servers.get(id)?;
+    Some(Path::new(&instance.path).join("latest.log"))
+}
+
+fn server_status_json(handle: &AppHandle, id: &str) -> serde_json::Value {
+    let cfg = config::load_config(handle).ok();
+    let status = cfg
+        .as_ref()
+        .and_then(|c| c.servers.get(id))
+        .map(|s| s.status.clone())
+        .unwrap_or_else(|| "unknown".to_string());
+    let running = process::is_running(handle, id);
+    serde_json::json!({ "id": id, "status": status, "running": running })
+}
+
+/// Reads new bytes from `offset`; returns (lines, next_offset, reset).
+fn read_log_since(path: &Path, offset: u64) -> std::io::Result<(Vec<String>, u64, bool)> {
+    let mut file = std::fs::File::open(path)?;
+    let len = file.metadata()?.len();
+    if len < offset {
+        // Rotation: start from the beginning of the fresh file.
+        let mut raw = String::new();
+        file.read_to_string(&mut raw)?;
+        let lines = raw
+            .lines()
+            .map(|s| s.to_string())
+            .collect::<Vec<String>>();
+        return Ok((lines, len, true));
+    }
+    if len == offset {
+        return Ok((Vec::new(), offset, false));
+    }
+    file.seek(SeekFrom::Start(offset))?;
+    let take = (len - offset).min(FOLLOW_READ_BYTES);
+    let mut buf = vec![0u8; take as usize];
+    let read = file.read(&mut buf)?;
+    let raw = String::from_utf8_lossy(&buf[..read]).to_string();
+    let complete = raw.ends_with('\n');
+    let mut lines: Vec<String> = raw.lines().map(|s| s.to_string()).collect();
+    let mut next = offset + read as u64;
+    if !complete {
+        // Leave the partial line for the next poll.
+        if lines.pop().is_some() {
+            next -= raw.rsplit('\n').next().map(|s| s.len() as u64).unwrap_or(0);
+        }
+    }
+    Ok((lines, next, false))
+}
+
+fn console_stream<S: Read + Write>(
+    handle: &AppHandle,
+    stream: &mut S,
+    auth: &AuthContext,
+    id: &str,
+) -> std::io::Result<()> {
+    if !auth.allows_scope(Scope::View) || !auth.allows_server(id) {
+        return respond(stream, 403, "application/json", &err("not allowed"));
+    }
+    let Some(log_path) = instance_log_path(handle, id) else {
+        return respond(stream, 404, "application/json", &err("server not found"));
+    };
+    let state: tauri::State<'_, WebRemoteState> = handle.state();
+    let generation = state.generation.load(Ordering::SeqCst);
+
+    start_stream(stream, "text/event-stream")?;
+
+    // Initial tail: the last N lines, then follow from the file end.
+    let mut offset = 0u64;
+    if let Ok(mut file) = std::fs::File::open(&log_path) {
+        let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+        offset = len;
+        let start = len.saturating_sub(MAX_LOG_BYTES);
+        let _ = file.seek(SeekFrom::Start(start));
+        let mut raw = String::new();
+        let _ = file.read_to_string(&mut raw);
+        let lines: Vec<&str> = raw.lines().collect();
+        let start = lines.len().saturating_sub(CONSOLE_TAIL_LINES);
+        let tail: Vec<String> = lines[start..].iter().map(|s| s.to_string()).collect();
+        sse_event(
+            stream,
+            "tail",
+            &serde_json::json!({ "lines": tail }).to_string(),
+        )?;
+    }
+    sse_event(stream, "status", &server_status_json(handle, id).to_string())?;
+
+    let started = Instant::now();
+    let mut last_status = Instant::now();
+    let mut last_ping = Instant::now();
+    loop {
+        if state.generation.load(Ordering::SeqCst) != generation
+            || started.elapsed().as_secs() > STREAM_MAX_SECS
+        {
+            break;
+        }
+        if let Ok((lines, next, reset)) = read_log_since(&log_path, offset) {
+            if reset {
+                sse_event(stream, "reset", "{}")?;
+            }
+            offset = next;
+            if !lines.is_empty() {
+                sse_event(
+                    stream,
+                    "log",
+                    &serde_json::json!({ "lines": lines }).to_string(),
+                )?;
+            }
+        }
+        if last_status.elapsed().as_secs() >= 2 {
+            last_status = Instant::now();
+            sse_event(stream, "status", &server_status_json(handle, id).to_string())?;
+        }
+        if last_ping.elapsed().as_secs() >= 15 {
+            last_ping = Instant::now();
+            write_chunk(stream, b": ping\n\n")?;
+        }
+        std::thread::sleep(Duration::from_millis(400));
+    }
+    let _ = write_chunk_end(stream);
+    Ok(())
+}
+
+fn events_stream<S: Read + Write>(
+    handle: &AppHandle,
+    stream: &mut S,
+    auth: &AuthContext,
+) -> std::io::Result<()> {
+    if !auth.allows_scope(Scope::View) {
+        return respond(stream, 403, "application/json", &err("not allowed"));
+    }
+    let state: tauri::State<'_, WebRemoteState> = handle.state();
+    let generation = state.generation.load(Ordering::SeqCst);
+
+    start_stream(stream, "text/event-stream")?;
+
+    let mut last_fingerprint = String::new();
+    let mut last_audit = crate::audit::read(handle, 1)
+        .first()
+        .map(|e| e.at)
+        .unwrap_or(0);
+    let started = Instant::now();
+    let mut last_ping = Instant::now();
+
+    loop {
+        if state.generation.load(Ordering::SeqCst) != generation
+            || started.elapsed().as_secs() > STREAM_MAX_SECS
+        {
+            break;
+        }
+        // Status fingerprint (only send when it changes).
+        let cfg = config::load_config(handle).ok();
+        let mut entries: Vec<serde_json::Value> = Vec::new();
+        if let Some(cfg) = cfg {
+            let mut ids: Vec<&String> = cfg.servers.keys().collect();
+            ids.sort();
+            for id in ids {
+                let running = process::is_running(handle, id);
+                let status = cfg.servers.get(id).map(|s| s.status.clone());
+                entries.push(serde_json::json!({
+                    "id": id,
+                    "status": status,
+                    "running": running,
+                }));
+            }
+        }
+        let fingerprint = serde_json::to_string(&entries).unwrap_or_default();
+        if fingerprint != last_fingerprint {
+            last_fingerprint = fingerprint;
+            sse_event(stream, "statuses", &serde_json::json!({ "servers": entries }).to_string())?;
+        }
+        // Audit deltas.
+        let audits = crate::audit::read(handle, 50);
+        let fresh: Vec<_> = audits.iter().filter(|e| e.at > last_audit).collect();
+        if !fresh.is_empty() {
+            last_audit = fresh.iter().map(|e| e.at).max().unwrap_or(last_audit);
+            let payload = serde_json::to_string(&fresh).unwrap_or_default();
+            sse_event(stream, "audit", &payload)?;
+        }
+        if last_ping.elapsed().as_secs() >= 15 {
+            last_ping = Instant::now();
+            write_chunk(stream, b": ping\n\n")?;
+        }
+        std::thread::sleep(Duration::from_millis(1000));
+    }
+    let _ = write_chunk_end(stream);
+    Ok(())
+}
+
+fn download_file<S: Read + Write>(
+    handle: &AppHandle,
+    stream: &mut S,
+    auth: &AuthContext,
+    id: &str,
+    query: &str,
+) -> std::io::Result<()> {
+    if !auth.allows_scope(Scope::View) || !auth.allows_server(id) {
+        return respond(stream, 403, "application/json", &err("not allowed"));
+    }
+    let Some(rel) = query_value(query, "path").filter(|p| !p.trim().is_empty()) else {
+        return respond(stream, 400, "application/json", &err("path is required"));
+    };
+    let Some(path) = resolve_instance_path(handle, id, &rel) else {
+        return respond(stream, 400, "application/json", &err("invalid path"));
+    };
+    let Ok(meta) = std::fs::metadata(&path) else {
+        return respond(stream, 404, "application/json", &err("file not found"));
+    };
+    if !meta.is_file() {
+        return respond(stream, 400, "application/json", &err("not a file"));
+    }
+    let Ok(mut file) = std::fs::File::open(&path) else {
+        return respond(stream, 500, "application/json", &err("failed to open file"));
+    };
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "download".to_string());
+    let headers = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nContent-Disposition: attachment; filename=\"{}\"\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+        meta.len(),
+        name.replace('"', "")
+    );
+    stream.write_all(headers.as_bytes())?;
+    std::io::copy(&mut file, stream)?;
+    stream.flush()
+}
+
+fn stream_upload<R: BufRead>(
+    reader: &mut R,
+    handle: &AppHandle,
+    auth: &AuthContext,
+    id: &str,
+    rel: String,
+    content_length: Option<u64>,
+) -> Result<u64, (u16, &'static str)> {
+    if !auth.allows_scope(Scope::Control) || !auth.allows_server(id) {
+        return Err((403, "not allowed"));
+    }
+    let Some(len) = content_length else {
+        return Err((411, "content-length required"));
+    };
+    if len > MAX_UPLOAD_BYTES {
+        return Err((413, "file too large"));
+    }
+    if rel.trim().is_empty() {
+        return Err((400, "path query parameter is required"));
+    }
+    let Some(path) = resolve_instance_path(handle, id, &rel) else {
+        return Err((400, "invalid path"));
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let mut file = std::fs::File::create(&path).map_err(|_| (500, "failed to create file"))?;
+    let mut limited = reader.take(len);
+    let copied = std::io::copy(&mut limited, &mut file).map_err(|_| (500, "upload failed"))?;
+    if copied != len {
+        return Err((400, "incomplete upload"));
+    }
+    Ok(copied)
+}
+
+/// Resolves a path inside an instance folder, rejecting traversal.
+fn resolve_instance_path(handle: &AppHandle, id: &str, rel: &str) -> Option<PathBuf> {
+    let cfg = config::load_config(handle).ok()?;
+    let instance = cfg.servers.get(id)?;
+    crate::paths::safe_join(Path::new(&instance.path), rel).ok()
+}
+
+// ---------------------------------------------------------------------------
+// Response helpers
+// ---------------------------------------------------------------------------
+
+pub(crate) fn respond<S: Write>(
+    stream: &mut S,
+    status: u16,
+    content_type: &str,
+    body: &str,
+) -> std::io::Result<()> {
+    let reason = match status {
+        200 => "OK",
+        201 => "Created",
+        202 => "Accepted",
+        401 => "Unauthorized",
+        403 => "Forbidden",
+        404 => "Not Found",
+        400 => "Bad Request",
+        411 => "Length Required",
+        413 => "Payload Too Large",
+        429 => "Too Many Requests",
+        431 => "Request Header Fields Too Large",
+        500 => "Internal Server Error",
+        _ => "Status",
+    };
+    let out = format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(out.as_bytes())?;
+    stream.flush()
+}
+
+fn respond_bytes<S: Write>(
+    stream: &mut S,
+    status: u16,
+    content_type: &str,
+    body: &[u8],
+) -> std::io::Result<()> {
+    let reason = if status == 200 { "OK" } else { "Status" };
+    let out = format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    stream.write_all(out.as_bytes())?;
+    stream.write_all(body)?;
+    stream.flush()
+}
+
+pub(crate) fn err(msg: &str) -> String {
+    serde_json::json!({ "error": msg }).to_string()
 }
 
 pub(crate) fn constant_eq(a: &[u8], b: &[u8]) -> bool {
@@ -473,47 +1517,12 @@ pub(crate) fn constant_eq(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
-/// Routes a request. Returns (status, content-type, body).
-fn route(handle: &AppHandle, method: &str, path: &str) -> (u16, &'static str, String) {
-    match (method, path) {
-        ("GET", "/") => (200, "text/html; charset=utf-8", MOBILE_HTML.to_string()),
-        ("GET", "/servers") | ("GET", "/api/servers") => (200, "application/json", servers_json(handle)),
-        ("GET", p) if p.starts_with("/log/") || p.starts_with("/api/log/") => {
-            let id = p.rsplit('/').next().unwrap_or("");
-            match tail_log(handle, id) {
-                Ok(lines) => (
-                    200,
-                    "application/json",
-                    serde_json::json!({ "lines": lines }).to_string(),
-                ),
-                Err(e) => (404, "application/json", err(&e)),
-            }
-        }
-        ("POST", p) if p.starts_with("/api/servers/") => {
-            let rest: Vec<&str> = p.trim_start_matches("/api/servers/").split('/').collect();
-            match (rest.first(), rest.get(1)) {
-                (Some(id), Some(action)) => act(handle, id, action),
-                _ => (404, "application/json", err("not found")),
-            }
-        }
-        ("POST", p) if p.starts_with("/start/") || p.starts_with("/stop/") || p.starts_with("/restart/") => {
-            let mut parts = p.trim_start_matches('/').split('/');
-            let action = parts.next().unwrap_or("");
-            let id = parts.next().unwrap_or("");
-            act(handle, id, action)
-        }
-        ("GET", "/health") => (200, "application/json", r#"{"status":"ok"}"#.to_string()),
-        _ => (404, "application/json", err("not found")),
-    }
-}
-
-pub(crate) fn servers_json(handle: &AppHandle) -> String {
-    servers_json_opts(handle, false)
-}
+// ---------------------------------------------------------------------------
+// Server list + actions (shared with the automation router)
+// ---------------------------------------------------------------------------
 
 /// Server list JSON. `include_ports` adds a live port scan per running
-/// instance (a netstat/ss call each), so it is opt-in — the automation API
-/// exposes it via `GET /servers?ports=1` for `kern-cli list --ports`.
+/// instance (a netstat/ss call each), so it is opt-in.
 pub(crate) fn servers_json_opts(handle: &AppHandle, include_ports: bool) -> String {
     let cfg = match config::load_config(handle) {
         Ok(c) => c,
@@ -607,219 +1616,3 @@ pub(crate) fn act(handle: &AppHandle, id: &str, action: &str) -> (u16, &'static 
     }
 }
 
-/// Reads the tail of an instance's latest.log (last 200 lines, at most 2 MiB).
-pub(crate) fn tail_log(handle: &AppHandle, id: &str) -> Result<Vec<String>, String> {
-    let cfg = config::load_config(handle)?;
-    let instance = cfg
-        .servers
-        .get(id)
-        .ok_or_else(|| format!("server '{id}' not found"))?;
-    let log_path = Path::new(&instance.path).join("latest.log");
-    if !log_path.exists() {
-        return Ok(Vec::new());
-    }
-    let file = std::fs::File::open(&log_path).map_err(|e| format!("failed to open log: {e}"))?;
-    let mut raw = String::new();
-    file.take(MAX_LOG_BYTES)
-        .read_to_string(&mut raw)
-        .map_err(|e| format!("failed to read log: {e}"))?;
-    let lines: Vec<&str> = raw.lines().collect();
-    let start = lines.len().saturating_sub(200);
-    Ok(lines[start..].iter().map(|s| s.to_string()).collect())
-}
-
-pub(crate) fn respond<S: Write>(
-    stream: &mut S,
-    status: u16,
-    content_type: &str,
-    body: &str,
-) -> std::io::Result<()> {
-    let reason = match status {
-        200 => "OK",
-        202 => "Accepted",
-        401 => "Unauthorized",
-        404 => "Not Found",
-        400 => "Bad Request",
-        431 => "Request Header Fields Too Large",
-        500 => "Internal Server Error",
-        _ => "Status",
-    };
-    let out = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    );
-    stream.write_all(out.as_bytes())?;
-    stream.flush()
-}
-
-pub(crate) fn err(msg: &str) -> String {
-    serde_json::json!({ "error": msg }).to_string()
-}
-
-/// Mobile control page (inline; no build step, no Tauri APIs).
-const MOBILE_HTML: &str = r#"<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="color-scheme" content="dark">
-<title>kern remote</title>
-<style>
-  :root { --bg:#050506; --surf:#0b0c10; --grid:#161920; --green:#4cf5a0; --amber:#f5a04c; --red:#f54c4c; --dim:#4c525e; --text:#e4e4e7; }
-  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
-  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; padding:12px calc(12px + env(safe-area-inset-right)) calc(12px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left)); }
-  header { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }
-  h1 { font-size:13px; letter-spacing:.25em; text-transform:uppercase; margin:0; font-weight:600; }
-  .dot { width:8px; height:8px; border-radius:50%; display:inline-block; }
-  .card { background:var(--surf); border:1px solid var(--grid); margin-bottom:10px; }
-  .card-head { padding:10px 12px; display:flex; align-items:center; gap:8px; width:100%; background:none; border:0; color:inherit; font:inherit; text-align:left; }
-  .name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .meta { font-size:11px; color:var(--dim); padding:0 12px 8px; }
-  .meters { padding:0 12px 10px; font-size:11px; color:var(--dim); }
-  .bar { height:4px; background:var(--grid); margin-top:4px; }
-  .bar > i { display:block; height:100%; background:var(--green); width:0; transition:width .3s; }
-  .bar.ram > i { background:var(--amber); }
-  .actions { display:flex; border-top:1px solid var(--grid); }
-  .actions button { flex:1; padding:12px 0; background:none; border:0; color:var(--text); font:600 13px ui-monospace,monospace; text-transform:uppercase; letter-spacing:.08em; }
-  .actions button + button { border-left:1px solid var(--grid); }
-  .actions .start { color:var(--green); }
-  .actions .stop { color:var(--red); }
-  button:active { opacity:.6; }
-  pre.log { margin:0; padding:12px; background:#000; border:1px solid var(--grid); font-size:11px; line-height:1.5; max-height:60vh; overflow:auto; white-space:pre-wrap; word-break:break-all; }
-  .empty { color:var(--dim); padding:16px 4px; font-size:12px; }
-  .badge { font-size:10px; text-transform:uppercase; letter-spacing:.15em; color:var(--dim); border:1px solid var(--grid); padding:1px 5px; }
-  .back { color:var(--green); background:none; border:0; font:inherit; padding:0 0 10px; }
-</style>
-</head>
-<body>
-<header>
-  <h1><span class="dot" style="background:var(--green);box-shadow:0 0 6px var(--green)"></span> kern</h1>
-  <span class="badge" id="conn">connecting…</span>
-</header>
-<main id="app"><p class="empty">loading…</p></main>
-<script>
-(function () {
-  var params = new URLSearchParams(location.search);
-  var token = params.get('token') || sessionStorage.getItem('kern.token') || '';
-  if (params.get('token')) {
-    sessionStorage.setItem('kern.token', token);
-    history.replaceState(null, '', location.pathname);
-  }
-  if (!token) { document.getElementById('app').innerHTML = '<p class="empty">not paired — scan the QR code from kern Settings.</p>'; return; }
-
-  var viewing = null;
-  var logTimer = null;
-
-  function api(path, opts) {
-    opts = opts || {};
-    opts.headers = Object.assign({ 'Authorization': 'Bearer ' + token }, opts.headers || {});
-    return fetch(path, opts).then(function (r) {
-      if (r.status === 401) { location.reload(); throw new Error('unauthorized'); }
-      if (!r.ok) return r.json().then(function (j) { throw new Error(j.error || r.status); });
-      return r.json();
-    });
-  }
-
-  function color(status) {
-    if (status === 'running') return 'var(--green)';
-    if (status === 'error' || status === 'stopped-forced') return 'var(--red)';
-    if (status === 'starting' || status === 'stopping' || status === 'installing') return 'var(--amber)';
-    return 'var(--dim)';
-  }
-
-  function renderList(servers) {
-    var app = document.getElementById('app');
-    if (viewing) return;
-    if (!servers.length) { app.innerHTML = '<p class="empty">no instances registered.</p>'; return; }
-    var groups = {};
-    servers.forEach(function (s) { var g = s.group || ''; (groups[g] = groups[g] || []).push(s); });
-    var html = '';
-    Object.keys(groups).sort(function (a, b) { return (a === '' ? 'zz' : a).localeCompare(b === '' ? 'zz' : b); }).forEach(function (g) {
-      if (g) html += '<div class="meta" style="padding:6px 2px;text-transform:uppercase;letter-spacing:.2em">' + esc(g) + '</div>';
-      groups[g].forEach(function (s) {
-        var m = s.metrics || { cpu: 0, ram: 0 };
-        html += '<div class="card">'
-          + '<button class="card-head" data-open="' + esc(s.id) + '">'
-          + '<span class="dot" style="background:' + color(s.status) + ';box-shadow:0 0 6px ' + color(s.status) + '"></span>'
-          + '<span class="name">' + esc(s.name) + '</span>'
-          + '<span class="badge">' + esc(s.orphaned ? 'orphan' : s.status) + '</span>'
-          + '</button>'
-          + '<div class="meters">cpu ' + Math.round((m.cpu || 0) * 100) + '%<div class="bar"><i style="width:' + Math.round((m.cpu || 0) * 100) + '%"></i></div>'
-          + 'ram ' + Math.round((m.ram || 0) * 100) + '%<div class="bar ram"><i style="width:' + Math.round((m.ram || 0) * 100) + '%"></i></div></div>'
-          + '<div class="actions">'
-          + (s.running
-              ? '<button data-act="restart" data-id="' + esc(s.id) + '">restart</button><button class="stop" data-act="stop" data-id="' + esc(s.id) + '">stop</button>'
-              : '<button class="start" data-act="start" data-id="' + esc(s.id) + '" ' + (s.orphaned ? 'disabled' : '') + '>start</button>')
-          + '</div></div>';
-      });
-    });
-    app.innerHTML = html;
-  }
-
-  function renderLog(lines, name) {
-    var html = '<button class="back" data-back="1">← back</button>'
-      + '<div class="meta" style="padding:0 2px 8px">' + esc(name) + ' · latest.log</div>'
-      + '<pre class="log" id="logbox">' + esc(lines.join('\n') || 'no output yet') + '</pre>';
-    var app = document.getElementById('app');
-    app.innerHTML = html;
-    var box = document.getElementById('logbox');
-    box.scrollTop = box.scrollHeight;
-  }
-
-  function esc(s) {
-    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
-      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
-    });
-  }
-
-  var lastServers = [];
-
-  function poll() {
-    api('/api/servers').then(function (data) {
-      lastServers = data.servers || [];
-      document.getElementById('conn').textContent = 'live';
-      renderList(lastServers);
-    }).catch(function () {
-      document.getElementById('conn').textContent = 'offline';
-    });
-  }
-
-  function pollLog(id) {
-    api('/api/log/' + encodeURIComponent(id)).then(function (data) {
-      var s = lastServers.find(function (x) { return x.id === id; });
-      renderLog(data.lines || [], s ? s.name : id);
-    }).catch(function () {});
-  }
-
-  document.addEventListener('click', function (e) {
-    var t = e.target.closest('button');
-    if (!t) return;
-    if (t.dataset.open) {
-      viewing = t.dataset.open;
-      pollLog(viewing);
-      if (logTimer) clearInterval(logTimer);
-      logTimer = setInterval(function () { pollLog(viewing); }, 2500);
-      return;
-    }
-    if (t.dataset.back) {
-      viewing = null;
-      if (logTimer) clearInterval(logTimer);
-      renderList(lastServers);
-      return;
-    }
-    if (t.dataset.act) {
-      t.disabled = true;
-      api('/api/servers/' + encodeURIComponent(t.dataset.id) + '/' + t.dataset.act, { method: 'POST' })
-        .then(function () { setTimeout(poll, 800); })
-        .catch(function (err) { alert(err.message); })
-        .finally(function () { t.disabled = false; });
-    }
-  });
-
-  poll();
-  setInterval(function () { if (!viewing) poll(); }, 3000);
-})();
-</script>
-</body>
-</html>
-"#;

@@ -18,6 +18,7 @@ mod plugin_secrets;
 mod process;
 mod rcon;
 mod registry;
+mod remote_auth;
 mod scheduler;
 mod scaffold;
 mod seed;
@@ -341,6 +342,8 @@ pub fn run() {
             tunnel::tunnel_info,
             tunnel::tunnel_download_binary,
             tunnel::tunnel_apply,
+            tunnel::tunnel_set_named,
+            tunnel::tunnel_clear_named,
             crash::get_last_crash,
             crash::clear_last_crash,
             automation::automation_info,
@@ -442,6 +445,13 @@ pub fn run() {
             rcon::rcon_players,
             web_remote::web_remote_info,
             web_remote::web_remote_regenerate_token,
+            web_remote::web_remote_qr,
+            remote_auth::remote_people,
+            remote_auth::remote_invite_create,
+            remote_auth::remote_invite_revoke,
+            remote_auth::remote_user_update,
+            remote_auth::remote_user_remove,
+            remote_auth::remote_device_revoke,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

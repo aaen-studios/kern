@@ -1,0 +1,14 @@
+{
+  "name": "kern remote",
+  "short_name": "kern",
+  "description": "control your kern server instances from anywhere",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#050506",
+  "theme_color": "#050506",
+  "icons": [
+    { "src": "/icon-32.png", "sizes": "32x32", "type": "image/png" },
+    { "src": "/icon-128.png", "sizes": "128x128", "type": "image/png" }
+  ]
+}

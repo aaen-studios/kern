@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#050506">
+<meta name="robots" content="noindex, nofollow">
+<title>kern remote</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon-32.png" type="image/png">
+<link rel="apple-touch-icon" href="/icon-128.png">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+
+<!-- boot / pairing -->
+<div id="gate" class="gate">
+  <div class="gate-card">
+    <div class="brand-lg"><span class="pulse"></span>kern<span class="dim">remote</span></div>
+    <div id="gate-body"><p class="muted">connecting…</p></div>
+  </div>
+</div>
+
+<!-- app shell -->
+<div id="app" class="app hidden">
+  <aside class="side">
+    <div class="brand"><span class="pulse"></span>kern<span class="dim">remote</span></div>
+    <nav id="nav" class="nav"></nav>
+    <div class="side-foot">
+      <div id="user-chip" class="user-chip muted"></div>
+      <div id="conn" class="conn muted">connecting…</div>
+    </div>
+  </aside>
+
+  <main id="main" class="main"></main>
+
+  <nav id="mobile-nav" class="mobile-nav"></nav>
+</div>
+
+<div id="toasts" class="toasts"></div>
+
+<script src="/app.js"></script>
+<script>
+  if ("serviceWorker" in navigator && location.protocol === "https:") {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+  }
+</script>
+</body>
+</html>

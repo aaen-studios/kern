@@ -117,6 +117,11 @@ pub(crate) fn route(
         ("POST", ["servers", id, "backup"]) => backup_create(app, id),
         ("POST", ["servers", id, "backups", name, "restore"]) => backup_restore(app, id, name),
         ("DELETE", ["servers", id, "backups", name]) => backup_delete(app, id, name),
+        // Files: browse / read / write a single file / structural ops.
+        ("GET", ["servers", id, "files"]) => files_list(app, id, query),
+        ("GET", ["servers", id, "file"]) => file_read(app, id, query),
+        ("PUT", ["servers", id, "file"]) => file_write(app, id, body),
+        ("POST", ["servers", id, "files"]) => file_op(app, id, body),
         ("POST", ["servers", id, action])
             if matches!(*action, "start" | "stop" | "restart" | "install") =>
         {
@@ -518,6 +523,85 @@ fn plugin_remove(app: &AppHandle, id: &str) -> R {
         Err(e) => bad_request(&e),
     }
 }
+
+// ──────────────────────────────────────────────────────────────────────────
+// files
+// ──────────────────────────────────────────────────────────────────────────
+
+/// `GET /servers/:id/files?path=<rel>` — directory listing.
+fn files_list(app: &AppHandle, id: &str, query: &str) -> R {
+    let path = query_value(query, "path").unwrap_or_default();
+    match commands::list_server_directory(app.clone(), id.to_string(), path) {
+        Ok(entries) => ok_json(json!({ "entries": entries })),
+        Err(e) => bad_request(&e),
+    }
+}
+
+/// `GET /servers/:id/file?path=<rel>` — file content + mtime for conflict checks.
+fn file_read(app: &AppHandle, id: &str, query: &str) -> R {
+    let Some(path) = query_value(query, "path") else {
+        return bad_request("path query parameter is required");
+    };
+    match commands::read_server_file(app.clone(), id.to_string(), path) {
+        Ok(file) => ok_json(json!(file)),
+        Err(e) => bad_request(&e),
+    }
+}
+
+/// `PUT /servers/:id/file` — `{ path, content, expectedMtime? }`.
+fn file_write(app: &AppHandle, id: &str, body: &str) -> R {
+    let parsed: Value = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(_) => return bad_request("invalid JSON body"),
+    };
+    let Some(path) = parsed.get("path").and_then(Value::as_str) else {
+        return bad_request("path is required");
+    };
+    let Some(content) = parsed.get("content").and_then(Value::as_str) else {
+        return bad_request("content is required");
+    };
+    let expected = parsed.get("expectedMtime").and_then(Value::as_f64);
+    match commands::write_server_file(app.clone(), id.to_string(), path.to_string(), content.to_string(), expected) {
+        Ok(mtime) => ok_json(json!({ "mtime": mtime })),
+        Err(e) => bad_request(&e),
+    }
+}
+
+/// `POST /servers/:id/files` — `{ op: "mkdir" | "delete" | "rename", path, to? }`.
+fn file_op(app: &AppHandle, id: &str, body: &str) -> R {
+    let parsed: Value = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(_) => return bad_request("invalid JSON body"),
+    };
+    let Some(op) = parsed.get("op").and_then(Value::as_str) else {
+        return bad_request("op is required");
+    };
+    let Some(path) = parsed.get("path").and_then(Value::as_str) else {
+        return bad_request("path is required");
+    };
+    let result = match op {
+        "mkdir" => commands::create_server_directory(app.clone(), id.to_string(), path.to_string()),
+        "delete" => commands::delete_server_path(app.clone(), id.to_string(), path.to_string()),
+        "delete_recursive" => {
+            commands::delete_server_path_recursive(app.clone(), id.to_string(), path.to_string())
+        }
+        "rename" => match parsed.get("to").and_then(Value::as_str) {
+            Some(to) => commands::rename_server_path(
+                app.clone(),
+                id.to_string(),
+                path.to_string(),
+                to.to_string(),
+            ),
+            None => return bad_request("to is required for rename"),
+        },
+        _ => return bad_request("unknown op"),
+    };
+    match result {
+        Ok(()) => ok_json(json!({ "ok": true })),
+        Err(e) => bad_request(&e),
+    }
+}
+
 
 // ──────────────────────────────────────────────────────────────────────────
 // audit / events
