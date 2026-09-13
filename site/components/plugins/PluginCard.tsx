@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { ViewTransition } from "react";
 import type { Plugin } from "@/lib/registry";
 import { formatRelativeTime, isOfficial, latestVersion } from "@/lib/registry";
 import { Badge, VerifiedBadge } from "@/components/ui/Badge";
@@ -25,6 +26,7 @@ export function PluginCard({ plugin }: { plugin: Plugin }) {
   return (
     <Link
       href={`/plugins/${plugin.id}`}
+      transitionTypes={["nav-forward"]}
       className="group flex h-full flex-col gap-3 bg-bg-core p-5 transition-colors hover:bg-bg-surface"
       style={{ boxShadow: "inset 0 0 0 1px rgba(22,25,32,0.9)" }}
     >
@@ -37,9 +39,11 @@ export function PluginCard({ plugin }: { plugin: Plugin }) {
             {CATEGORY_GLYPH[plugin.category] ?? "○"}
           </span>
           <div>
-            <h3 className="font-mono text-sm lowercase text-zinc-100 group-hover:text-signal-high">
-              {plugin.display_name}
-            </h3>
+            <ViewTransition name={`plugin-${plugin.id}`}>
+              <h3 className="font-mono text-sm lowercase text-zinc-100 group-hover:text-signal-high">
+                {plugin.display_name}
+              </h3>
+            </ViewTransition>
             <div className="flex items-center gap-1.5">
               <span className="font-mono text-[10px] text-signal-low">
                 {plugin.author}

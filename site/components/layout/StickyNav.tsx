@@ -30,6 +30,7 @@ export function StickyNav() {
 
   return (
     <header
+      style={{ viewTransitionName: "site-header" }}
       className={`fixed inset-x-0 top-0 z-50 transition-colors duration-300 ${scrolled
         ? "bg-bg-core/85 backdrop-blur-sm border-b border-grid-bounds/60"
         : "bg-transparent border-b border-transparent"

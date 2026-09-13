@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { ViewTransition } from "react";
 import { notFound } from "next/navigation";
 import {
   getPlugin,
@@ -96,9 +97,11 @@ export default async function PluginDetailPage(
       <header className="mb-10 flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
         <div className="max-w-2xl">
           <div className="mb-2 flex items-center gap-2">
-            <h1 className="font-mono text-3xl lowercase text-zinc-100">
-              {plugin.display_name}
-            </h1>
+            <ViewTransition name={`plugin-${plugin.id}`}>
+              <h1 className="font-mono text-3xl lowercase text-zinc-100">
+                {plugin.display_name}
+              </h1>
+            </ViewTransition>
             {official && <VerifiedBadge />}
           </div>
           <p className="font-mono text-xs text-signal-low">

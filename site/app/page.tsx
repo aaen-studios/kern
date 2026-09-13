@@ -3,6 +3,7 @@ import { Hero } from "@/components/landing/Hero";
 import { SignalRadarStrip } from "@/components/landing/SignalRadarStrip";
 import { ScanDivider } from "@/components/ui/ScanDivider";
 import { LazySections } from "@/components/landing/LazySections";
+import { FAQ_ITEMS } from "@/lib/faq";
 
 /*
   Landing page (§10). Server component — fetches release data at build time
@@ -18,8 +19,25 @@ export default async function Home() {
     getAllReleases(),
   ]);
 
+  const faqJsonLd = {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    mainEntity: FAQ_ITEMS.map((item) => ({
+      "@type": "Question",
+      name: item.q,
+      acceptedAnswer: { "@type": "Answer", text: item.a },
+    })),
+  };
+
   return (
     <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{
+          __html: JSON.stringify(faqJsonLd).replace(/</g, "\\u003c"),
+        }}
+      />
+
       {/* above-fold — always eager */}
       <Hero release={release} />
       <ScanDivider />

@@ -43,6 +43,20 @@ export function BootSequence() {
     };
   }, [reduce]);
 
+  // any input dismisses the overlay immediately
+  useEffect(() => {
+    if (!show) return;
+    const skip = () => setShow(false);
+    window.addEventListener("pointerdown", skip);
+    window.addEventListener("keydown", skip);
+    window.addEventListener("wheel", skip, { passive: true });
+    return () => {
+      window.removeEventListener("pointerdown", skip);
+      window.removeEventListener("keydown", skip);
+      window.removeEventListener("wheel", skip);
+    };
+  }, [show]);
+
   if (!show) return null;
 
   return (

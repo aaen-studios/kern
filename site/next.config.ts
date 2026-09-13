@@ -1,6 +1,11 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  experimental: {
+    // route transitions via React's <ViewTransition> (progressive
+    // enhancement — without browser support, navigation is instant)
+    viewTransition: true,
+  },
   // Pin the workspace root so Turbopack doesn't mis-infer it from a stray
   // parent-dir lockfile. Keeps the build quiet; no other config needed.
   turbopack: {

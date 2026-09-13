@@ -18,6 +18,21 @@ const TerminalMock = dynamic(
   () => import("@/components/landing/TerminalMock").then((m) => m.TerminalMock),
   { ssr: false },
 );
+const HowItWorks = dynamic(
+  () => import("@/components/landing/HowItWorks").then((m) => m.HowItWorks),
+  { ssr: false },
+);
+const ComparisonTable = dynamic(
+  () =>
+    import("@/components/landing/ComparisonTable").then(
+      (m) => m.ComparisonTable,
+    ),
+  { ssr: false },
+);
+const FAQ = dynamic(
+  () => import("@/components/landing/FAQ").then((m) => m.FAQ),
+  { ssr: false },
+);
 const ReactorMock = dynamic(
   () => import("@/components/landing/ReactorMock").then((m) => m.ReactorMock),
   { ssr: false },
@@ -75,6 +90,10 @@ export function LazySections({
   return (
     <>
       <Suspense fallback={<SectionFallback height="h-[500px]" />}>
+        <HowItWorks />
+      </Suspense>
+      <ScanDivider />
+      <Suspense fallback={<SectionFallback height="h-[500px]" />}>
         <TerminalMock />
       </Suspense>
       <ScanDivider />
@@ -96,6 +115,14 @@ export function LazySections({
       <ScanDivider />
       <Suspense fallback={<SectionFallback height="h-[400px]" />}>
         <AgentSkillSection />
+      </Suspense>
+      <ScanDivider />
+      <Suspense fallback={<SectionFallback height="h-[500px]" />}>
+        <ComparisonTable />
+      </Suspense>
+      <ScanDivider />
+      <Suspense fallback={<SectionFallback height="h-[400px]" />}>
+        <FAQ />
       </Suspense>
       <ScanDivider />
       <Suspense fallback={<SectionFallback height="h-[300px]" />}>
