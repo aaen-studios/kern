@@ -180,9 +180,12 @@ case "$PLATFORM" in
     ARCHIVE="${INSTALLER}.zip"
     echo "⟳ Creating $ARCHIVE ..."
     rm -f "$ARCHIVE"
+    # ZIP_STORED on purpose: tauri-plugin-updater reads the archive with the
+    # `zip` crate compiled *without* compression features on Windows, so a
+    # Deflated entry fails in-app with "Compression method not supported".
     $PY -c "
 import zipfile, os, sys
-with zipfile.ZipFile(sys.argv[1], 'w', zipfile.ZIP_DEFLATED) as zf:
+with zipfile.ZipFile(sys.argv[1], 'w', zipfile.ZIP_STORED) as zf:
     zf.write(sys.argv[2], os.path.basename(sys.argv[2]))
 " "$ARCHIVE" "$INSTALLER"
     ;;
@@ -259,6 +262,22 @@ fi
 echo "  Installer: $INSTALLER"
 echo "  Archive:   $ARCHIVE"
 
+# The updater's zip reader on Windows is compiled without decompression
+# features — only Stored entries extract in-app. Fail the build here rather
+# than shipping another uninstallable archive (v0.4.1 shipped Deflated and
+# every Windows in-app update failed with "Compression method not supported").
+if [ "$PLATFORM" = "windows" ]; then
+  $PY - "$ARCHIVE" <<'PYEOF'
+import sys, zipfile
+with zipfile.ZipFile(sys.argv[1]) as zf:
+    bad = [i.filename for i in zf.infolist() if i.compress_type != zipfile.ZIP_STORED]
+if bad:
+    print("! updater archive must be ZIP_STORED; compressed entries: " + ", ".join(bad))
+    sys.exit(1)
+PYEOF
+  echo "✓ Updater archive is stored (uncompressed) — readable by the in-app updater."
+fi
+
 # Verify archive exists
 if [ -f "$ARCHIVE" ]; then
   echo "✓ Archive created: $(du -h "$ARCHIVE" | cut -f1)"
@@ -267,14 +286,14 @@ else
   echo "  Retrying with Python zipfile..."
   $PY -c "
 import zipfile, os, sys
-with zipfile.ZipFile(sys.argv[1], 'w', zipfile.ZIP_DEFLATED) as zf:
+with zipfile.ZipFile(sys.argv[1], 'w', zipfile.ZIP_STORED) as zf:
     zf.write(sys.argv[2], os.path.basename(sys.argv[2]))
 " "$ARCHIVE" "$INSTALLER"
   if [ -f "$ARCHIVE" ]; then
     echo "✓ Created successfully."
   else
     echo "! Still failed. Run this manually after the script:"
-    echo "  $PY -c \"import zipfile,os,sys; zipfile.ZipFile(sys.argv[1],'w',zipfile.ZIP_DEFLATED).write(sys.argv[2],os.path.basename(sys.argv[2]))\" \"$ARCHIVE\" \"$INSTALLER\""
+    echo "  $PY -c \"import zipfile,os,sys; zipfile.ZipFile(sys.argv[1],'w',zipfile.ZIP_STORED).write(sys.argv[2],os.path.basename(sys.argv[2]))\" \"$ARCHIVE\" \"$INSTALLER\""
   fi
 fi
 
