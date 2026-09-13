@@ -24,7 +24,7 @@ A desktop server manager for Windows, macOS, and Linux. Register any project as 
 - **Automation API + `kern-cli`**: Versioned loopback-only JSON API (v2) and a scriptable CLI with a full-screen dashboard, fleet selectors, log filtering, backups/tasks, and shell completions
 - **Audit Log**: Local history of lifecycle actions, config changes, plugin installs, backups, and task runs (exportable)
 - **Scheduled Tasks**: Interval/daily/cron tasks with pre-restart console announcements and run-now
-- **Web Remote**: Self-signed HTTPS mobile control panel paired by QR code
+- **Web Remote**: Self-signed HTTPS mobile control panel paired by QR code, with an optional Cloudflare quick tunnel for access from anywhere
 - **Auto-Updater**: Signed in-app updates via GitHub Releases
 
 ## Quick Start

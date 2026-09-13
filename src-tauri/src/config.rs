@@ -67,6 +67,14 @@ pub struct AppSettings {
     /// HTTPS port for the web remote.
     #[serde(default = "default_web_remote_port")]
     pub web_remote_port: u16,
+    /// Expose the web remote publicly through a Cloudflare quick tunnel
+    /// (`cloudflared`). Off by default; a public URL is a public credential.
+    #[serde(default)]
+    pub cf_tunnel_enabled: bool,
+    /// Last quick-tunnel URL reported by cloudflared (host-managed, shown in
+    /// the settings panel while the tunnel reconnects).
+    #[serde(default)]
+    pub cf_tunnel_url: String,
     /// Legacy passphrase field (superseded by token pairing; retained for
     /// config backward-compatibility).
     #[serde(default)]
@@ -432,6 +440,8 @@ fn default_config(app_handle: &AppHandle) -> Result<AppConfig, String> {
             registry_url: default_registry_url(),
             web_remote_enabled: false,
             web_remote_port: default_web_remote_port(),
+            cf_tunnel_enabled: false,
+            cf_tunnel_url: String::new(),
             web_remote_passphrase: String::new(),
             sync_repo_url: String::new(),
             native_notifications: true,

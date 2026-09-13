@@ -376,5 +376,7 @@ pub fn quit(app: &AppHandle) {
     // also cleared to break the registry's link to these processes.
     let registry: tauri::State<'_, process::ProcessRegistry> = app.state();
     registry.detach_all();
+    // The cloudflare tunnel must not outlive the app, unlike servers.
+    crate::tunnel::shutdown(app);
     app.exit(0);
 }

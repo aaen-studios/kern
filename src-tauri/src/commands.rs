@@ -330,6 +330,10 @@ pub fn update_app_settings(
     // Log-alert rules are compiled from settings — recompile immediately so a
     // save takes effect without an app restart.
     crate::logwatch::reload(&app_handle);
+    // The web remote + cloudflare tunnel apply live as well (the banner in the
+    // settings panel no longer says "restart kern").
+    crate::web_remote::apply_settings(&app_handle);
+    crate::tunnel::apply_settings(&app_handle);
     crate::audit::record(&app_handle, "settings", "updated app settings", None);
     Ok(())
 }

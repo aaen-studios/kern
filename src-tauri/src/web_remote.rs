@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer, PrivateKeyDer};
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::config;
 use crate::metrics::MetricsState;
@@ -45,29 +45,62 @@ pub struct WebRemoteState {
     token: Mutex<Option<String>>,
     pub running: AtomicBool,
     pub port: Mutex<u16>,
+    /// Invalidates the accept loop when settings change (start/stop/restart).
+    generation: std::sync::atomic::AtomicU64,
 }
 
-/// Spawns the web remote if enabled in settings. No-op otherwise.
-pub fn maybe_spawn(app_handle: &AppHandle) {
+/// Brings the web remote up/down to match the saved settings. Safe to call on
+/// every settings save and at startup; no-op when already in the right state.
+pub fn apply_settings(app_handle: &AppHandle) {
     let cfg = match config::load_config(app_handle) {
         Ok(c) => c,
         Err(_) => return,
     };
-    if !cfg.settings.web_remote_enabled {
+    let enabled = cfg.settings.web_remote_enabled;
+    let port = cfg.settings.web_remote_port;
+    let state: tauri::State<'_, WebRemoteState> = app_handle.state();
+    let running = state.running.load(Ordering::SeqCst);
+    let active_port = state.port.lock().map(|p| *p).unwrap_or(0);
+
+    if !enabled {
+        if running {
+            // Bump the generation; the accept loop notices and exits.
+            state
+                .generation
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let _ = app_handle.emit("kern://web-remote-state", ());
+        }
         return;
     }
+    if running && active_port == port {
+        return;
+    }
+
+    // Restart: invalidate the old loop, wait for it to release the port, spawn.
+    state
+        .generation
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    for _ in 0..20 {
+        if !state.running.load(Ordering::SeqCst) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
     // Ensure a token exists before the server accepts connections.
     if let Err(e) = load_or_create_token(app_handle) {
         eprintln!("[web-remote] could not initialise auth token: {e}");
         return;
     }
-    let port = cfg.settings.web_remote_port;
-    {
-        let state: tauri::State<'_, WebRemoteState> = app_handle.state();
-        let _ = state.port.lock().map(|mut p| *p = port);
-    }
+    let _ = state.port.lock().map(|mut p| *p = port);
+    let generation = state.generation.load(std::sync::atomic::Ordering::SeqCst);
     let handle = app_handle.clone();
-    std::thread::spawn(move || serve(&handle, port));
+    std::thread::spawn(move || serve(&handle, port, generation));
+}
+
+/// Legacy entry point kept for setup; delegates to [`apply_settings`].
+pub fn maybe_spawn(app_handle: &AppHandle) {
+    apply_settings(app_handle);
 }
 
 fn token_entry() -> Result<keyring::Entry, String> {
@@ -135,6 +168,22 @@ pub struct WebRemoteInfo {
     pub token: String,
     pub urls: Vec<String>,
     pub qr_svg: String,
+    /// Cloudflare quick-tunnel status (see [`crate::tunnel`]).
+    pub tunnel: crate::tunnel::TunnelInfo,
+    /// Pairing QR for the public tunnel URL (empty until the tunnel is up).
+    pub tunnel_qr_svg: String,
+}
+
+fn qr_svg_for(url: &str) -> String {
+    qrcode::QrCode::new(url.as_bytes())
+        .map(|code| {
+            code.render::<qrcode::render::svg::Color>()
+                .min_dimensions(220, 220)
+                .dark_color(qrcode::render::svg::Color("#e4e4e7"))
+                .light_color(qrcode::render::svg::Color("#050506"))
+                .build()
+        })
+        .unwrap_or_default()
 }
 
 fn build_info(app_handle: &AppHandle) -> Result<WebRemoteInfo, String> {
@@ -155,14 +204,13 @@ fn build_info(app_handle: &AppHandle) -> Result<WebRemoteInfo, String> {
     urls.push(format!("https://localhost:{port}"));
 
     let pair_url = format!("{}/?token={token}", urls[0]);
-    let qr_svg = qrcode::QrCode::new(pair_url.as_bytes())
-        .map(|code| {
-            code.render::<qrcode::render::svg::Color>()
-                .min_dimensions(220, 220)
-                .dark_color(qrcode::render::svg::Color("#e4e4e7"))
-                .light_color(qrcode::render::svg::Color("#050506"))
-                .build()
-        })
+    let qr_svg = qr_svg_for(&pair_url);
+
+    let tunnel = crate::tunnel::info(app_handle);
+    let tunnel_qr_svg = tunnel
+        .url
+        .as_ref()
+        .map(|url| qr_svg_for(&format!("{url}/?token={token}")))
         .unwrap_or_default();
 
     Ok(WebRemoteInfo {
@@ -172,6 +220,8 @@ fn build_info(app_handle: &AppHandle) -> Result<WebRemoteInfo, String> {
         token,
         urls,
         qr_svg,
+        tunnel,
+        tunnel_qr_svg,
     })
 }
 
@@ -246,7 +296,7 @@ fn tls_config(app_handle: &AppHandle) -> Result<Arc<ServerConfig>, String> {
 // Server loop
 // ---------------------------------------------------------------------------
 
-fn serve(handle: &AppHandle, port: u16) {
+fn serve(handle: &AppHandle, port: u16, generation: u64) {
     let tls = match tls_config(handle) {
         Ok(cfg) => cfg,
         Err(e) => {
@@ -261,35 +311,54 @@ fn serve(handle: &AppHandle, port: u16) {
             return;
         }
     };
+    // Non-blocking accept so the loop can notice a settings change (generation
+    // bump) without waiting for the next connection.
+    let _ = listener.set_nonblocking(true);
     {
         let state: tauri::State<'_, WebRemoteState> = handle.state();
         state.running.store(true, Ordering::SeqCst);
     }
     eprintln!("[web-remote] listening on https://0.0.0.0:{port} (token required)");
+    let _ = handle.emit("kern://web-remote-state", ());
 
     let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    for stream in listener.incoming() {
-        let Ok(tcp) = stream else { continue };
-        let current = active.load(Ordering::SeqCst);
-        if current >= MAX_CONNECTIONS {
-            continue; // shed load; the handshake would fail anyway
+    loop {
+        let state: tauri::State<'_, WebRemoteState> = handle.state();
+        if state.generation.load(std::sync::atomic::Ordering::SeqCst) != generation {
+            break;
         }
-        let _ = tcp.set_read_timeout(Some(Duration::from_secs(10)));
-        let _ = tcp.set_write_timeout(Some(Duration::from_secs(10)));
-        let tls = tls.clone();
-        let h = handle.clone();
-        let active = active.clone();
-        active.fetch_add(1, Ordering::SeqCst);
-        std::thread::spawn(move || {
-            if let Ok(conn) = ServerConnection::new(tls) {
-                let stream = StreamOwned::new(conn, tcp);
-                let _ = handle_conn(&h, stream);
+        match listener.accept() {
+            Ok((tcp, _)) => {
+                let _ = tcp.set_nonblocking(false);
+                let current = active.load(Ordering::SeqCst);
+                if current >= MAX_CONNECTIONS {
+                    continue; // shed load; the handshake would fail anyway
+                }
+                let _ = tcp.set_read_timeout(Some(Duration::from_secs(10)));
+                let _ = tcp.set_write_timeout(Some(Duration::from_secs(10)));
+                let tls = tls.clone();
+                let h = handle.clone();
+                let active = active.clone();
+                active.fetch_add(1, Ordering::SeqCst);
+                std::thread::spawn(move || {
+                    if let Ok(conn) = ServerConnection::new(tls) {
+                        let stream = StreamOwned::new(conn, tcp);
+                        let _ = handle_conn(&h, stream);
+                    }
+                    active.fetch_sub(1, Ordering::SeqCst);
+                });
             }
-            active.fetch_sub(1, Ordering::SeqCst);
-        });
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(150));
+            }
+            Err(_) => {
+                std::thread::sleep(Duration::from_millis(150));
+            }
+        }
     }
     let state: tauri::State<'_, WebRemoteState> = handle.state();
     state.running.store(false, Ordering::SeqCst);
+    let _ = handle.emit("kern://web-remote-state", ());
 }
 
 /// Reads one line into `out`, stopping once `cap` bytes have been consumed.

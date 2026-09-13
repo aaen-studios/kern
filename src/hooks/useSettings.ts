@@ -35,6 +35,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   registryUrl: "https://kern.aaenz.no",
   webRemoteEnabled: false,
   webRemotePort: 7440,
+  cfTunnelEnabled: false,
+  cfTunnelUrl: "",
   webRemotePassphrase: "",
   syncRepoUrl: "",
   nativeNotifications: true,

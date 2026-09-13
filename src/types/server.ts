@@ -156,6 +156,10 @@ export interface AppSettings {
   webRemoteEnabled?: boolean;
   /** HTTPS port for the web remote (default 7440). */
   webRemotePort?: number;
+  /** Expose the web remote publicly through a Cloudflare quick tunnel. */
+  cfTunnelEnabled?: boolean;
+  /** Last quick-tunnel URL reported by cloudflared (host-managed). */
+  cfTunnelUrl?: string;
   /** Passphrase required to access the web remote (empty = open on LAN). */
   webRemotePassphrase?: string;
   /** Git repo URL for optional multi-machine registry sync. Empty = disabled. */

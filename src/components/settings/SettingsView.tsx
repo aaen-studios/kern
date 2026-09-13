@@ -45,6 +45,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
       | "startHiddenInTray"
       | "trayRadar"
       | "webRemoteEnabled"
+      | "cfTunnelEnabled"
       | "nativeNotifications"
       | "webhookEnabled"
       | "automationEnabled",
@@ -258,20 +259,31 @@ export function SettingsView({ onBack }: SettingsViewProps) {
               <div className="space-y-1 border border-grid-bounds">
                 <ToggleRow
                   label="Enable web remote"
-                  description="Serve a mobile control panel over self-signed HTTPS on the LAN: status, start/stop/restart, and live logs. Pair by scanning the QR code. Requires a restart to take effect."
+                  description="Serve a mobile control panel over self-signed HTTPS on the LAN: status, start/stop/restart, and live logs. Pair by scanning the QR code. Applies immediately."
                   checked={!!settings.webRemoteEnabled}
                   onChange={(v) => void handleSetting("webRemoteEnabled", v)}
                 />
                 <Divider />
                 <InputRow
                   label="HTTPS port"
-                  description="Port for the web remote (default 7440). Changing it requires a restart."
+                  description="Port for the web remote (default 7440). Applies immediately."
                   value={String(settings.webRemotePort ?? 7440)}
                   onCommit={(v) => void handleNumberSetting("webRemotePort", parseInt(v) || 7440)}
                   type="number"
                 />
                 <Divider />
-                <WebRemotePairing enabled={!!settings.webRemoteEnabled} />
+                <ToggleRow
+                  label="Expose via Cloudflare tunnel"
+                  description="Run a cloudflared quick tunnel so the panel is reachable from anywhere at a random *.trycloudflare.com URL (no port forwarding). Public URL + token = full control; keep it off unless you need it."
+                  checked={!!settings.cfTunnelEnabled}
+                  disabled={!settings.webRemoteEnabled}
+                  onChange={(v) => void handleSetting("cfTunnelEnabled", v)}
+                />
+                <Divider />
+                <WebRemotePairing
+                  enabled={!!settings.webRemoteEnabled}
+                  tunnelEnabled={!!settings.cfTunnelEnabled}
+                />
               </div>
               <p className="mt-2 text-[11px] text-zinc-600">
                 Access is token-protected; the token is stored in the OS

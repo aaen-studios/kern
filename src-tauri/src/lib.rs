@@ -25,6 +25,7 @@ mod snapshots;
 mod sync;
 mod tray;
 mod tray_radar;
+mod tunnel;
 mod ui_state;
 mod watcher;
 mod watchdog;
@@ -128,6 +129,7 @@ pub fn run() {
         .manage(logwatch::LogAlertState::default())
         .manage(automation::AutomationState::default())
         .manage(tray_radar::RadarControl::default())
+        .manage(tunnel::TunnelState::default())
         .setup(|app| {
             let handle = app.handle().clone();
 
@@ -270,6 +272,10 @@ pub fn run() {
             // Optionally serve the web remote (LAN JSON API) if enabled.
             web_remote::maybe_spawn(&handle);
 
+            // Optionally expose the web remote through a cloudflared quick
+            // tunnel (requires the web remote).
+            tunnel::maybe_spawn(&handle);
+
             // Compile log-alert rules and start the loopback automation API.
             logwatch::reload(&handle);
             automation::maybe_spawn(&handle);
@@ -308,6 +314,8 @@ pub fn run() {
                         let registry: tauri::State<'_, process::ProcessRegistry> =
                             handle.state();
                         registry.detach_all();
+                        // The tunnel, unlike servers, must not outlive the app.
+                        crate::tunnel::shutdown(&handle);
                     }
                 }
                 WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {
@@ -330,6 +338,9 @@ pub fn run() {
             take_pending_deep_link,
             audit::get_audit_log,
             audit::export_audit_log,
+            tunnel::tunnel_info,
+            tunnel::tunnel_download_binary,
+            tunnel::tunnel_apply,
             crash::get_last_crash,
             crash::clear_last_crash,
             automation::automation_info,
