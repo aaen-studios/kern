@@ -3106,8 +3106,14 @@ pub fn list_backups(app_handle: AppHandle, id: String) -> Result<Vec<serde_json:
             .unwrap_or_default()
             .to_string_lossy()
             .to_string();
-        let size = path.metadata().map(|m| m.len()).unwrap_or(0);
-        entries.push(serde_json::json!({ "name": name, "size": size }));
+        let meta = path.metadata().ok();
+        let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+        let created = meta
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        entries.push(serde_json::json!({ "name": name, "size": size, "created": created }));
     }
 
     entries.sort_by(|a, b| {

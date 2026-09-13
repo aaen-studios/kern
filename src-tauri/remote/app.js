@@ -804,7 +804,7 @@
           `/servers/${encodeURIComponent(server.id)}/files?path=${encodeURIComponent(state.filesPath)}`,
         );
         const entries = (data.entries || []).slice().sort((a, b) => {
-          if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
+          if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
           return String(a.name).localeCompare(String(b.name));
         });
         list.innerHTML =
@@ -813,12 +813,12 @@
             ? entries
                 .map(
                   (e) => `
-              <div class="frow ${e.is_dir ? "dir" : ""}" data-name="${esc(e.name)}" data-dir="${e.is_dir ? "1" : ""}">
-                <span class="nowrap">${e.is_dir ? "▸ " : ""}${esc(e.name)}</span>
-                <span class="col-size dim">${e.is_dir ? "" : fmtBytes(e.size)}</span>
+              <div class="frow ${e.isDir ? "dir" : ""}" data-name="${esc(e.name)}" data-dir="${e.isDir ? "1" : ""}">
+                <span class="nowrap">${e.isDir ? "▸ " : ""}${esc(e.name)}</span>
+                <span class="col-size dim">${e.isDir ? "" : fmtBytes(e.size)}</span>
                 <span class="col-modified dim">${fmtTime(e.modified)}</span>
                 <span class="actions">
-                  ${!e.is_dir ? `<button class="btn" data-download="${esc(e.name)}">get</button>` : ""}
+                  ${!e.isDir ? `<button class="btn" data-download="${esc(e.name)}">get</button>` : ""}
                   ${can("control") ? `<button class="btn danger" data-del="${esc(e.name)}">del</button>` : ""}
                 </span>
               </div>`,

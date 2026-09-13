@@ -17,6 +17,8 @@ interface TunnelInfo {
   binaryFound: boolean;
   binary: string | null;
   managed: boolean;
+  mode: string;
+  hostname: string | null;
 }
 
 interface WebRemoteInfo {
@@ -294,9 +296,9 @@ export function WebRemotePairing({
               </button>
             </div>
             <p className="text-[10px] text-amber-400/90 leading-snug">
-              Anyone with this URL and your token can control your servers. Quick
-              tunnels are rate-limited and intended for personal use — turn this
-              off when you&apos;re done.
+              {tunnel?.mode === "named"
+                ? "Anyone with this URL and a paired device token can control your servers. Put Cloudflare Access in front for anything long-lived."
+                : "Anyone with this URL and your token can control your servers. Quick tunnels are rate-limited and intended for personal use — turn this off when you're done, or switch to a named tunnel for a stable URL."}
             </p>
           </div>
         )}
