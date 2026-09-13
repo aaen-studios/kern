@@ -19,6 +19,7 @@ mod process;
 mod rcon;
 mod registry;
 mod remote_auth;
+mod remote_jobs;
 mod scheduler;
 mod scaffold;
 mod seed;
@@ -125,6 +126,7 @@ pub fn run() {
         .manage(watcher::WatcherState::default())
         .manage(watchdog::WatchdogState::default())
         .manage(web_remote::WebRemoteState::default())
+        .manage(remote_jobs::JobState::default())
         .manage(PendingDeepLink::default())
         .manage(FrontendReady::default())
         .manage(logwatch::LogAlertState::default())

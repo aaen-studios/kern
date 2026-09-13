@@ -28,6 +28,9 @@ use crate::config;
 use crate::crash;
 use crate::metrics::{MetricsHistory, MetricsState};
 use crate::process;
+use crate::rcon;
+use crate::registry;
+use crate::remote_jobs::{self, JobState};
 use crate::scheduler;
 use crate::snapshots;
 use crate::web_remote;
@@ -130,6 +133,18 @@ pub(crate) fn route(
         ("POST", ["servers", id, "snapshots"]) => snapshot_capture(app, id, body),
         ("POST", ["servers", id, "snapshots", "restore"]) => snapshot_restore(app, id, body),
         ("DELETE", ["servers", id, "snapshots"]) => snapshot_delete(app, id, body),
+        // Schedules + per-instance config surfaces the panel edits.
+        ("PUT", ["servers", id, "tasks"]) => tasks_update(app, id, body),
+        ("GET", ["servers", id, "backup-schedule"]) => backup_schedule_get(app, id),
+        ("PUT", ["servers", id, "backup-schedule"]) => backup_schedule_put(app, id, body),
+        ("GET", ["servers", id, "snippets"]) => snippets_get(app, id),
+        ("PUT", ["servers", id, "snippets"]) => snippets_put(app, id, body),
+        ("GET", ["servers", id, "rcon"]) => rcon_status(app, id),
+        ("GET", ["servers", id, "players"]) => rcon_players_route(app, id),
+        // Registry marketplace + background jobs.
+        ("GET", ["registry", "plugins"]) => registry_plugins(app, query),
+        ("POST", ["registry", "install"]) => registry_install(app, body),
+        ("GET", ["jobs", job_id]) => job_get(app, job_id),
         ("POST", ["servers", id, action])
             if matches!(*action, "start" | "stop" | "restart" | "install") =>
         {
@@ -235,6 +250,9 @@ fn server_detail(app: &AppHandle, id: &str) -> R {
         "adopted": adopted,
         "orphaned": instance.is_orphaned,
         "autoStart": instance.auto_start,
+        "stopCommand": instance.stop_command,
+        "stopTimeoutSecs": instance.stop_timeout_secs,
+        "userOverrides": instance.user_overrides,
         "pid": pid,
         "uptimeSecs": uptime,
         "metrics": metrics,
@@ -639,6 +657,179 @@ fn snapshot_delete(app: &AppHandle, id: &str, body: &str) -> R {
     ) {
         Ok(()) => ok_json(json!({ "ok": true })),
         Err(e) => bad_request(&e),
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// schedules + per-instance config
+// ──────────────────────────────────────────────────────────────────────────
+
+/// `PUT /servers/:id/tasks` body `{ tasks: [...] }` — replace the task list.
+fn tasks_update(app: &AppHandle, id: &str, body: &str) -> R {
+    let parsed: Value = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(_) => return bad_request("invalid JSON body"),
+    };
+    let raw = parsed.get("tasks").cloned().unwrap_or_else(|| Value::Array(vec![]));
+    let tasks: Vec<config::ScheduledTask> = match serde_json::from_value(raw) {
+        Ok(tasks) => tasks,
+        Err(e) => return bad_request(&format!("invalid tasks: {e}")),
+    };
+    match commands::update_server_tasks(app.clone(), id.to_string(), tasks) {
+        Ok(()) => ok_json(json!({ "ok": true })),
+        Err(e) => bad_request(&e),
+    }
+}
+
+fn instance_field<T: serde::Serialize>(
+    app: &AppHandle,
+    id: &str,
+    pick: impl FnOnce(&config::ServerInstance) -> T,
+) -> R {
+    let cfg = match config::load_config(app) {
+        Ok(cfg) => cfg,
+        Err(e) => return internal(&e),
+    };
+    match cfg.servers.get(id) {
+        Some(instance) => ok_json(json!(pick(instance))),
+        None => not_found(&format!("server '{id}' not found")),
+    }
+}
+
+/// `GET /servers/:id/backup-schedule`.
+fn backup_schedule_get(app: &AppHandle, id: &str) -> R {
+    instance_field(app, id, |instance| instance.backup_schedule.clone())
+}
+
+/// `PUT /servers/:id/backup-schedule` body = the schedule object.
+fn backup_schedule_put(app: &AppHandle, id: &str, body: &str) -> R {
+    let schedule: config::BackupSchedule = match serde_json::from_str(body) {
+        Ok(schedule) => schedule,
+        Err(e) => return bad_request(&format!("invalid schedule: {e}")),
+    };
+    match commands::update_backup_schedule(app.clone(), id.to_string(), schedule) {
+        Ok(()) => ok_json(json!({ "ok": true })),
+        Err(e) => bad_request(&e),
+    }
+}
+
+/// `GET /servers/:id/snippets`.
+fn snippets_get(app: &AppHandle, id: &str) -> R {
+    instance_field(app, id, |instance| instance.command_snippets.clone())
+}
+
+/// `PUT /servers/:id/snippets` body `{ snippets: ["..."] }`.
+fn snippets_put(app: &AppHandle, id: &str, body: &str) -> R {
+    let parsed: Value = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(_) => return bad_request("invalid JSON body"),
+    };
+    let snippets: Vec<String> = match parsed.get("snippets").cloned() {
+        Some(value) => match serde_json::from_value(value) {
+            Ok(list) => list,
+            Err(e) => return bad_request(&format!("invalid snippets: {e}")),
+        },
+        None => return bad_request("snippets is required"),
+    };
+    match commands::update_command_snippets(app.clone(), id.to_string(), snippets) {
+        Ok(()) => ok_json(json!({ "ok": true })),
+        Err(e) => bad_request(&e),
+    }
+}
+
+/// `GET /servers/:id/rcon` — connection status (no password).
+fn rcon_status(app: &AppHandle, id: &str) -> R {
+    match rcon::rcon_get_status(app.clone(), id.to_string()) {
+        Ok(status) => ok_json(json!(status)),
+        Err(e) => not_found(&e),
+    }
+}
+
+/// `GET /servers/:id/players` — live player list over RCON.
+fn rcon_players_route(app: &AppHandle, id: &str) -> R {
+    match rcon::rcon_players(app.clone(), id.to_string()) {
+        Ok(players) => ok_json(json!(players)),
+        Err(e) => bad_request(&e),
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// registry marketplace + jobs
+// ──────────────────────────────────────────────────────────────────────────
+
+/// `GET /registry/plugins?q=&category=&sort=` — marketplace listing.
+fn registry_plugins(app: &AppHandle, query: &str) -> R {
+    let q = query_value(query, "q");
+    let category = query_value(query, "category");
+    let sort = query_value(query, "sort");
+    match tauri::async_runtime::block_on(registry::registry_list_plugins(
+        app.clone(),
+        q,
+        category,
+        sort,
+    )) {
+        Ok(plugins) => ok_json(json!({ "plugins": plugins })),
+        Err(e) => bad_request(&e),
+    }
+}
+
+/// `POST /registry/install` body `{ slug, version }` → `202 { jobId }`.
+fn registry_install(app: &AppHandle, body: &str) -> R {
+    let parsed: Value = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(_) => return bad_request("invalid JSON body"),
+    };
+    let (Some(slug), Some(version)) = (
+        parsed.get("slug").and_then(Value::as_str),
+        parsed.get("version").and_then(Value::as_str),
+    ) else {
+        return bad_request("slug and version are required");
+    };
+    let expected = parsed
+        .get("sha256")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+
+    let job_id = remote_jobs::start(&app.state::<JobState>(), "registry-install");
+    let app_bg = app.clone();
+    let job_bg = job_id.clone();
+    let slug = slug.to_string();
+    let version = version.to_string();
+    std::thread::spawn(move || {
+        let progress_id = job_bg.clone();
+        let result = tauri::async_runtime::block_on(registry::registry_install_plugin(
+            app_bg.clone(),
+            slug,
+            version,
+            progress_id,
+            expected,
+        ));
+        let jobs = app_bg.state::<JobState>();
+        match result {
+            Ok(manifest) => remote_jobs::finish(
+                &jobs,
+                &job_bg,
+                Ok(format!(
+                    "installed {} {}",
+                    manifest.display_name, manifest.version
+                )),
+            ),
+            Err(e) => remote_jobs::finish(&jobs, &job_bg, Err(e)),
+        }
+    });
+
+    (
+        202,
+        "application/json",
+        json!({ "jobId": job_id, "status": "accepted" }).to_string(),
+    )
+}
+
+/// `GET /jobs/:id` — poll a background job.
+fn job_get(app: &AppHandle, id: &str) -> R {
+    match remote_jobs::get(&app.state::<JobState>(), id) {
+        Some(job) => ok_json(json!(job)),
+        None => not_found("job not found"),
     }
 }
 

@@ -9,6 +9,8 @@ const NAV = [
   { key: "settings", label: "settings", glyph: "⚙" },
 ];
 
+const PLUGINS_NAV = { key: "plugins", label: "plugins", glyph: "❖" };
+
 export function Shell({
   user,
   section,
@@ -21,6 +23,7 @@ export function Shell({
   children: ReactNode;
 }) {
   const active = section === "s" ? "overview" : section;
+  const nav = user.role === "admin" ? [...NAV, PLUGINS_NAV] : NAV;
   const connClass =
     conn === "live" ? "text-signal-high" : conn === "offline" ? "text-fault-vector" : "text-zinc-600";
 
@@ -40,7 +43,7 @@ export function Shell({
         </button>
 
         <nav className="flex flex-col gap-0.5">
-          {NAV.map((item) => (
+          {nav.map((item) => (
             <button
               key={item.key}
               onClick={() => navigate(`/${item.key}`)}
@@ -71,7 +74,7 @@ export function Shell({
 
       {/* mobile bottom nav */}
       <nav className="fixed inset-x-0 bottom-0 z-20 flex border-t border-grid-bounds bg-bg-core/95 pb-[env(safe-area-inset-bottom)] backdrop-blur lg:hidden">
-        {NAV.map((item) => (
+        {nav.map((item) => (
           <button
             key={item.key}
             onClick={() => navigate(`/${item.key}`)}

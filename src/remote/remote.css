@@ -14,3 +14,19 @@ body,
 body {
   overscroll-behavior-y: none;
 }
+
+/* Small shared controls (forms are dense and repetitive in the panel). */
+@layer components {
+  .input {
+    @apply w-full border border-grid-bounds bg-bg-core px-2 py-1.5 font-mono text-xs text-zinc-100 outline-none;
+  }
+  .input:focus {
+    @apply border-signal-low;
+  }
+  .btn {
+    @apply border border-grid-bounds px-3 py-1.5 font-mono text-[11px] lowercase text-zinc-300 hover:text-zinc-100;
+  }
+  .card-panel {
+    @apply border border-grid-bounds bg-bg-surface p-4;
+  }
+}

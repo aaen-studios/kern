@@ -11,6 +11,8 @@ import { Overview } from "./pages/Overview";
 import { ServerView } from "./pages/ServerView";
 import { Audit } from "./pages/Audit";
 import { Settings } from "./pages/Settings";
+import { Plugins } from "./pages/Plugins";
+import { InstanceForm } from "./features/instances/InstanceForm";
 
 type Phase = "checking" | "gate" | "ready";
 
@@ -94,6 +96,13 @@ function Ready({ user, segments }: { user: AuthUser; segments: string[] }) {
   const page =
     section === "s" && id ? (
       <ServerView id={id} tab={tab ?? "console"} user={user} />
+    ) : section === "new" ? (
+      <InstanceForm
+        onDone={(createdId) => navigate(createdId ? `/s/${createdId}/settings` : "/overview")}
+        onCancel={() => navigate("/overview")}
+      />
+    ) : section === "plugins" ? (
+      <Plugins />
     ) : section === "audit" ? (
       <Audit />
     ) : section === "settings" ? (

@@ -1,12 +1,20 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { api } from "../lib/api";
+import { api, apiRaw } from "../lib/api";
 import { fmtAgo, fmtBytes, fmtUptime, statusDotClass } from "../lib/format";
 import { navigate } from "../lib/router";
 import { can, canServer } from "../lib/roles";
 import { useServers } from "../lib/servers";
-import { useSse } from "../lib/sse";
+import { downloadInstanceFile, useSse } from "../lib/sse";
 import { useToast } from "../lib/toast";
-import type { AuthUser, Backup, MetricSample, ServerSummary, Task } from "../lib/types";
+import type {
+  AuthUser,
+  Backup,
+  BackupSchedule,
+  MetricSample,
+  RconPlayers,
+  ServerSummary,
+  Task,
+} from "../lib/types";
 
 const FilesFeature = lazy(() =>
   import("../features/files/FilesFeature").then((module) => ({
@@ -14,8 +22,13 @@ const FilesFeature = lazy(() =>
   })),
 );
 
-const TABS = ["console", "metrics", "files", "backups", "tasks"] as const;
-type Tab = (typeof TABS)[number];
+const InstanceForm = lazy(() =>
+  import("../features/instances/InstanceForm").then((module) => ({
+    default: module.InstanceForm,
+  })),
+);
+
+const TABS = ["console", "metrics", "files", "backups", "tasks"];
 
 export function ServerView({
   id,
@@ -29,7 +42,8 @@ export function ServerView({
   const { servers, refresh } = useServers();
   const { push } = useToast();
   const server = servers.find((entry) => entry.id === id);
-  const active = (TABS as readonly string[]).includes(tab) ? (tab as Tab) : "console";
+  const tabs = can(user, "admin") ? [...TABS, "settings"] : [...TABS];
+  const active = tabs.includes(tab) ? tab : "console";
   const allowed = !!server && can(user, "control") && canServer(user, server.id);
 
   if (!server) {
@@ -79,6 +93,14 @@ export function ServerView({
           {server.uptimeSecs ? ` · up ${fmtUptime(server.uptimeSecs)}` : ""}
         </span>
         <span className="ml-auto flex gap-1.5">
+          {can(user, "admin") && !server.running && (
+            <button
+              onClick={() => void act("install")}
+              className="border border-grid-bounds px-3 py-1 font-mono text-[11px] lowercase text-zinc-300 hover:bg-bg-surface"
+            >
+              install
+            </button>
+          )}
           {allowed && !server.running && (
             <button
               onClick={() => void act("start")}
@@ -107,7 +129,7 @@ export function ServerView({
       </header>
 
       <nav className="mt-4 flex flex-wrap gap-1 border-b border-grid-bounds">
-        {TABS.map((item) => (
+        {tabs.map((item) => (
           <button
             key={item}
             onClick={() => navigate(`/s/${encodeURIComponent(server.id)}/${item}`)}
@@ -138,6 +160,25 @@ export function ServerView({
         )}
         {active === "backups" && <BackupsTab server={server} allowed={allowed} />}
         {active === "tasks" && <TasksTab server={server} allowed={allowed} />}
+        {active === "settings" && (
+          <Suspense
+            fallback={
+              <p className="py-8 text-center font-mono text-[11px] text-zinc-600">loading…</p>
+            }
+          >
+            <InstanceForm
+              serverId={server.id}
+              onDone={(nextId) => {
+                if (nextId) {
+                  void refresh();
+                } else {
+                  navigate("/overview");
+                }
+              }}
+              onCancel={() => navigate(`/s/${encodeURIComponent(server.id)}/console`)}
+            />
+          </Suspense>
+        )}
       </div>
     </div>
   );
@@ -161,6 +202,15 @@ function ConsoleTab({ server, allowed }: { server: ServerSummary; allowed: boole
   const [historyIndex, setHistoryIndex] = useState(-1);
   const boxRef = useRef<HTMLDivElement>(null);
   const { push } = useToast();
+  const [snippets, setSnippets] = useState<string[]>([]);
+  const [players, setPlayers] = useState<string[] | null>(null);
+  const [playersError, setPlayersError] = useState("");
+
+  useEffect(() => {
+    void api<string[]>(`/servers/${encodeURIComponent(server.id)}/snippets`)
+      .then((list) => setSnippets(list ?? []))
+      .catch(() => setSnippets([]));
+  }, [server.id]);
 
   const status = useSse(`/servers/${encodeURIComponent(server.id)}/console`, (event, data) => {
     if (event === "tail" || event === "log") {
@@ -176,16 +226,46 @@ function ConsoleTab({ server, allowed }: { server: ServerSummary; allowed: boole
     boxRef.current.scrollTop = boxRef.current.scrollHeight;
   }, [lines, autoscroll]);
 
+  async function sendLine(line: string) {
+    try {
+      await api(`/servers/${encodeURIComponent(server.id)}/stdin`, { json: { line } });
+    } catch (err) {
+      push(err instanceof Error ? err.message : "send failed", "error");
+    }
+  }
+
   async function send() {
     const line = draft.trim();
     if (!line) return;
     setDraft("");
     setHistory((prev) => [...prev, line]);
     setHistoryIndex(-1);
+    await sendLine(line);
+  }
+
+  async function downloadLog() {
     try {
-      await api(`/servers/${encodeURIComponent(server.id)}/stdin`, { json: { line } });
+      const res = await apiRaw(`/servers/${encodeURIComponent(server.id)}/log/download`);
+      if (!res.ok) throw new Error("download failed");
+      const blob = await res.blob();
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = `${server.name}-latest.log`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(link.href), 10000);
     } catch (err) {
-      push(err instanceof Error ? err.message : "send failed", "error");
+      push(err instanceof Error ? err.message : "download failed", "error");
+    }
+  }
+
+  async function loadPlayers() {
+    setPlayersError("");
+    try {
+      const data = await api<RconPlayers>(`/servers/${encodeURIComponent(server.id)}/players`);
+      setPlayers(data.players ?? []);
+    } catch (err) {
+      setPlayers(null);
+      setPlayersError(err instanceof Error ? err.message : "rcon unavailable");
     }
   }
 
@@ -217,10 +297,33 @@ function ConsoleTab({ server, allowed }: { server: ServerSummary; allowed: boole
         >
           clear
         </button>
+        <button
+          onClick={() => void downloadLog()}
+          className="border border-grid-bounds px-2 py-1 font-mono text-[10px] lowercase text-zinc-500 hover:text-zinc-300"
+        >
+          download
+        </button>
+        <button
+          onClick={() => void loadPlayers()}
+          className="border border-grid-bounds px-2 py-1 font-mono text-[10px] lowercase text-zinc-500 hover:text-zinc-300"
+        >
+          players
+        </button>
         <span className="ml-auto font-mono text-[10px] uppercase tracking-[0.15em] text-zinc-600">
           {status === "live" ? "streaming" : status}
         </span>
       </div>
+
+      {playersError && (
+        <p className="border-b border-grid-bounds px-2 py-1 font-mono text-[10px] text-warn-vector">
+          {playersError}
+        </p>
+      )}
+      {players && (
+        <div className="border-b border-grid-bounds px-2 py-1 font-mono text-[10px] text-zinc-500">
+          {players.length} online{players.length ? `: ${players.join(", ")}` : ""}
+        </div>
+      )}
 
       <div ref={boxRef} className="flex-1 overflow-y-auto p-3 font-mono text-[11.5px] leading-relaxed">
         {visible.map((line, index) => (
@@ -230,6 +333,20 @@ function ConsoleTab({ server, allowed }: { server: ServerSummary; allowed: boole
         ))}
         {visible.length === 0 && <p className="text-zinc-600">no output yet.</p>}
       </div>
+
+      {snippets.length > 0 && allowed && (
+        <div className="flex flex-wrap gap-1 border-t border-grid-bounds px-2 py-1.5">
+          {snippets.map((snippet) => (
+            <button
+              key={snippet}
+              onClick={() => void sendLine(snippet)}
+              className="border border-grid-bounds px-2 py-0.5 font-mono text-[10px] text-zinc-400 hover:text-signal-high"
+            >
+              {snippet}
+            </button>
+          ))}
+        </div>
+      )}
 
       {allowed && (
         <form
@@ -376,16 +493,20 @@ function Chart({ samples }: { samples: MetricSample[] }) {
 }
 
 
-/* ── backups ─────────────────────────────────────────────────────────── */
+
+/* -- backups (schedule + snapshots) ------------------------------------ */
 
 function BackupsTab({ server, allowed }: { server: ServerSummary; allowed: boolean }) {
   const [backups, setBackups] = useState<Backup[]>([]);
+  const [schedule, setSchedule] = useState<BackupSchedule | null>(null);
   const [busy, setBusy] = useState(false);
   const { push } = useToast();
 
-  const load = async () => {
+  const loadBackups = async () => {
     try {
-      const data = await api<{ backups: Backup[] }>(`/servers/${encodeURIComponent(server.id)}/backups`);
+      const data = await api<{ backups: Backup[] }>(
+        `/servers/${encodeURIComponent(server.id)}/backups`,
+      );
       setBackups(data.backups ?? []);
     } catch (err) {
       push(err instanceof Error ? err.message : "backups failed", "error");
@@ -393,12 +514,80 @@ function BackupsTab({ server, allowed }: { server: ServerSummary; allowed: boole
   };
 
   useEffect(() => {
-    void load();
+    void loadBackups();
+    void api<BackupSchedule>(`/servers/${encodeURIComponent(server.id)}/backup-schedule`)
+      .then(setSchedule)
+      .catch(() => setSchedule(null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [server.id]);
 
   return (
     <div>
+      {/* schedule */}
+      {schedule && (
+        <div className="mb-4 border border-grid-bounds bg-bg-surface p-3">
+          <p className="font-mono text-[10px] uppercase tracking-[0.15em] text-zinc-600">
+            automatic backups
+          </p>
+          <div className="mt-2 flex flex-wrap items-end gap-3">
+            <label className="flex flex-col gap-1">
+              <span className="font-mono text-[10px] text-zinc-600">every (minutes, 0 = off)</span>
+              <input
+                value={String(Math.round((schedule.intervalSecs || 0) / 60))}
+                onChange={(event) =>
+                  setSchedule({
+                    ...schedule,
+                    intervalSecs: Math.max(0, Number(event.target.value) || 0) * 60,
+                  })
+                }
+                disabled={!allowed}
+                inputMode="numeric"
+                className="input w-32"
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="font-mono text-[10px] text-zinc-600">keep</span>
+              <input
+                value={String(schedule.keep ?? 12)}
+                onChange={(event) =>
+                  setSchedule({ ...schedule, keep: Math.max(1, Number(event.target.value) || 1) })
+                }
+                disabled={!allowed}
+                inputMode="numeric"
+                className="input w-20"
+              />
+            </label>
+            <label className="flex items-center gap-2 pb-1.5 font-mono text-[11px] text-zinc-400">
+              <input
+                type="checkbox"
+                checked={!!schedule.onStop}
+                onChange={(event) => setSchedule({ ...schedule, onStop: event.target.checked })}
+                disabled={!allowed}
+              />
+              also on clean stop
+            </label>
+            {allowed && (
+              <button
+                onClick={async () => {
+                  try {
+                    await api(`/servers/${encodeURIComponent(server.id)}/backup-schedule`, {
+                      method: "PUT",
+                      json: schedule,
+                    });
+                    push("schedule saved", "success");
+                  } catch (err) {
+                    push(err instanceof Error ? err.message : "save failed", "error");
+                  }
+                }}
+                className="border border-signal-high/40 px-3 py-1.5 font-mono text-[11px] lowercase text-signal-high"
+              >
+                save schedule
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="flex items-center gap-2">
         <span className="font-mono text-[11px] text-zinc-600">
           plugin-defined snapshots (minecraft worlds today)
@@ -411,7 +600,7 @@ function BackupsTab({ server, allowed }: { server: ServerSummary; allowed: boole
               try {
                 await api(`/servers/${encodeURIComponent(server.id)}/backup`, { method: "POST" });
                 push("backup accepted — this can take a moment", "warn");
-                window.setTimeout(() => void load(), 2500);
+                window.setTimeout(() => void loadBackups(), 2500);
               } catch (err) {
                 push(err instanceof Error ? err.message : "backup failed", "error");
               } finally {
@@ -441,6 +630,14 @@ function BackupsTab({ server, allowed }: { server: ServerSummary; allowed: boole
               <td className="py-2 pr-2 text-zinc-600">{fmtBytes(backup.size)}</td>
               <td className="py-2 pr-2 text-zinc-600">{fmtAgo(backup.created)}</td>
               <td className="py-2 text-right">
+                <button
+                  onClick={() =>
+                    void downloadInstanceFile(server.id, `backups/${backup.name}`, backup.name)
+                  }
+                  className="mr-3 text-zinc-400 hover:text-signal-high"
+                >
+                  download
+                </button>
                 {allowed && (
                   <>
                     <button
@@ -468,7 +665,7 @@ function BackupsTab({ server, allowed }: { server: ServerSummary; allowed: boole
                             `/servers/${encodeURIComponent(server.id)}/backups/${encodeURIComponent(backup.name)}`,
                             { method: "DELETE" },
                           );
-                          void load();
+                          push("deleted", "warn");
                         } catch (err) {
                           push(err instanceof Error ? err.message : "delete failed", "error");
                         }
@@ -491,10 +688,13 @@ function BackupsTab({ server, allowed }: { server: ServerSummary; allowed: boole
   );
 }
 
-/* ── tasks ───────────────────────────────────────────────────────────── */
+/* -- tasks (full editor) ----------------------------------------------- */
+
+const TASK_ACTIONS = ["restart", "start", "stop", "command", "backup", "health"];
 
 function TasksTab({ server, allowed }: { server: ServerSummary; allowed: boolean }) {
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [dirty, setDirty] = useState(false);
   const { push } = useToast();
 
   useEffect(() => {
@@ -504,31 +704,155 @@ function TasksTab({ server, allowed }: { server: ServerSummary; allowed: boolean
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [server.id]);
 
+  const update = (id: string, patch: Partial<Task>) => {
+    setTasks((prev) => prev.map((task) => (task.id === id ? { ...task, ...patch } : task)));
+    setDirty(true);
+  };
+
+  const scheduleMode = (task: Task): "daily" | "interval" | "cron" | "manual" => {
+    if (task.dailyAt) return "daily";
+    if (task.intervalSecs) return "interval";
+    if (task.cron) return "cron";
+    return "manual";
+  };
+
   return (
     <div>
-      <table className="w-full border-collapse">
-        <thead>
-          <tr className="border-b border-grid-bounds text-left font-mono text-[10px] lowercase text-zinc-600">
-            <th className="py-1.5 pr-2 font-normal">task</th>
-            <th className="py-1.5 pr-2 font-normal">action</th>
-            <th className="py-1.5 pr-2 font-normal">when</th>
-            <th />
-          </tr>
-        </thead>
-        <tbody>
-          {tasks.map((task) => (
-            <tr key={task.id} className="border-b border-grid-bounds/40 font-mono text-[11px]">
-              <td className="py-2 pr-2 text-zinc-300">{task.name || task.id}</td>
-              <td className="py-2 pr-2 text-zinc-600">{task.action}</td>
-              <td className="py-2 pr-2 text-zinc-600">
-                {task.dailyAt
-                  ? `daily ${task.dailyAt}`
-                  : task.intervalSecs
-                    ? `every ${Math.round(task.intervalSecs / 60)}m`
-                    : "—"}
-              </td>
-              <td className="py-2 text-right">
-                {allowed && (
+      <div className="flex items-center gap-2">
+        <span className="font-mono text-[11px] text-zinc-600">
+          scheduled actions � saved per instance, run by the host scheduler.
+        </span>
+        {allowed && (
+          <>
+            <button
+              onClick={() => {
+                setTasks((prev) => [
+                  ...prev,
+                  {
+                    id: `task_${Date.now().toString(36)}`,
+                    name: "new task",
+                    enabled: true,
+                    action: "restart",
+                    command: "",
+                    intervalSecs: 0,
+                    dailyAt: "",
+                    cron: "",
+                  },
+                ]);
+                setDirty(true);
+              }}
+              className="ml-auto border border-grid-bounds px-3 py-1 font-mono text-[11px] lowercase text-zinc-300"
+            >
+              add task
+            </button>
+            <button
+              disabled={!dirty}
+              onClick={async () => {
+                try {
+                  await api(`/servers/${encodeURIComponent(server.id)}/tasks`, {
+                    method: "PUT",
+                    json: { tasks },
+                  });
+                  push("tasks saved", "success");
+                  setDirty(false);
+                } catch (err) {
+                  push(err instanceof Error ? err.message : "save failed", "error");
+                }
+              }}
+              className="border border-signal-high/40 px-3 py-1 font-mono text-[11px] lowercase text-signal-high disabled:opacity-40"
+            >
+              save tasks
+            </button>
+          </>
+        )}
+      </div>
+
+      <div className="mt-3 space-y-2">
+        {tasks.map((task) => (
+          <div key={task.id} className="border border-grid-bounds bg-bg-surface p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                value={task.name ?? ""}
+                onChange={(event) => update(task.id, { name: event.target.value })}
+                disabled={!allowed}
+                placeholder="name"
+                className="input max-w-[180px]"
+              />
+              <select
+                value={task.action ?? "restart"}
+                onChange={(event) => update(task.id, { action: event.target.value })}
+                disabled={!allowed}
+                className="input max-w-[130px]"
+              >
+                {TASK_ACTIONS.map((action) => (
+                  <option key={action} value={action}>
+                    {action}
+                  </option>
+                ))}
+              </select>
+              <label className="flex items-center gap-1.5 font-mono text-[10px] text-zinc-500">
+                <input
+                  type="checkbox"
+                  checked={task.enabled !== false}
+                  onChange={(event) => update(task.id, { enabled: event.target.checked })}
+                  disabled={!allowed}
+                />
+                enabled
+              </label>
+              <select
+                value={scheduleMode(task)}
+                onChange={(event) => {
+                  const mode = event.target.value;
+                  update(task.id, {
+                    dailyAt: mode === "daily" ? task.dailyAt || "04:00" : "",
+                    intervalSecs: mode === "interval" ? task.intervalSecs || 3600 : 0,
+                    cron: mode === "cron" ? task.cron || "0 4 * * *" : "",
+                  });
+                }}
+                disabled={!allowed}
+                className="input max-w-[110px]"
+              >
+                <option value="manual">manual</option>
+                <option value="daily">daily at</option>
+                <option value="interval">every</option>
+                <option value="cron">cron</option>
+              </select>
+              {scheduleMode(task) === "daily" && (
+                <input
+                  value={task.dailyAt ?? ""}
+                  onChange={(event) => update(task.id, { dailyAt: event.target.value })}
+                  disabled={!allowed}
+                  placeholder="04:00"
+                  className="input max-w-[90px]"
+                />
+              )}
+              {scheduleMode(task) === "interval" && (
+                <label className="flex items-center gap-1 font-mono text-[10px] text-zinc-500">
+                  <input
+                    value={String(Math.round((task.intervalSecs ?? 0) / 60))}
+                    onChange={(event) =>
+                      update(task.id, {
+                        intervalSecs: Math.max(1, Number(event.target.value) || 1) * 60,
+                      })
+                    }
+                    disabled={!allowed}
+                    inputMode="numeric"
+                    className="input max-w-[70px]"
+                  />
+                  min
+                </label>
+              )}
+              {scheduleMode(task) === "cron" && (
+                <input
+                  value={task.cron ?? ""}
+                  onChange={(event) => update(task.id, { cron: event.target.value })}
+                  disabled={!allowed}
+                  placeholder="0 4 * * *"
+                  className="input max-w-[130px]"
+                />
+              )}
+              {allowed && (
+                <>
                   <button
                     onClick={async () => {
                       try {
@@ -545,15 +869,33 @@ function TasksTab({ server, allowed }: { server: ServerSummary; allowed: boolean
                   >
                     run now
                   </button>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {tasks.length === 0 && (
-        <p className="mt-4 font-mono text-[11px] text-zinc-600">no scheduled tasks.</p>
-      )}
+                  <button
+                    onClick={() => {
+                      setTasks((prev) => prev.filter((entry) => entry.id !== task.id));
+                      setDirty(true);
+                    }}
+                    className="ml-auto text-fault-vector"
+                  >
+                    remove
+                  </button>
+                </>
+              )}
+            </div>
+            {task.action === "command" && (
+              <input
+                value={task.command ?? ""}
+                onChange={(event) => update(task.id, { command: event.target.value })}
+                disabled={!allowed}
+                placeholder="command (stdin while running, shell when stopped)"
+                className="input mt-2"
+              />
+            )}
+          </div>
+        ))}
+        {tasks.length === 0 && (
+          <p className="font-mono text-[11px] text-zinc-600">no scheduled tasks.</p>
+        )}
+      </div>
     </div>
   );
 }

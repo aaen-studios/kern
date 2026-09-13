@@ -719,6 +719,13 @@ enum Phase {
         query: String,
         auth: AuthContext,
     },
+    LogDownload {
+        id: String,
+        auth: AuthContext,
+    },
+    AuditDownload {
+        auth: AuthContext,
+    },
     Fail {
         status: u16,
         message: &'static str,
@@ -771,6 +778,8 @@ fn handle_conn<S: Read + Write>(
         Phase::Download { id, query, auth } => {
             download_file(handle, &mut stream, &auth, &id, &query)
         }
+        Phase::LogDownload { id, auth } => log_download(handle, &mut stream, &auth, &id),
+        Phase::AuditDownload { auth } => audit_download(handle, &mut stream, &auth),
         Phase::Fail {
             status,
             message,
@@ -893,6 +902,30 @@ fn handle_request<R: BufRead>(
             query,
             auth,
         },
+        ("GET", ["api", "servers", id, "log", "download"]) => Phase::LogDownload {
+            id: id.to_string(),
+            auth,
+        },
+        ("GET", ["api", "audit", "download"]) => Phase::AuditDownload { auth },
+        ("POST", ["api", "plugins", "upload-install"]) => {
+            if !auth.allows_scope(Scope::Admin) {
+                Phase::Fail {
+                    status: 403,
+                    message: "admins only",
+                    auth_failure: false,
+                }
+            } else {
+                let name = query_value(&query, "name").unwrap_or_else(|| "plugin.kern".to_string());
+                match install_uploaded_plugin(reader, handle, head.content_length, &name) {
+                    Ok((status, body)) => Phase::Json { status, body },
+                    Err((status, message)) => Phase::Fail {
+                        status,
+                        message,
+                        auth_failure: false,
+                    },
+                }
+            }
+        }
         ("POST", ["api", "servers", id, "upload"]) => {
             let rel = query_value(&query, "path").unwrap_or_default();
             match stream_upload(reader, handle, &auth, id, rel, head.content_length) {
@@ -1202,9 +1235,15 @@ fn required_scope(method: &str, seg: &[&str]) -> Scope {
                 "servers",
                 _,
                 "log" | "metrics" | "energy" | "preflight" | "crash" | "tasks" | "backups"
-                | "files" | "file" | "search" | "snapshots" | "snapshot",
+                | "files" | "file" | "search" | "snapshots" | "snapshot" | "backup-schedule"
+                | "snippets" | "rcon",
             ],
         ) => View,
+        // Player queries execute RCON, so they need control.
+        ("GET", ["servers", _, "players"]) => Control,
+        ("GET", ["registry", "plugins"]) => View,
+        ("GET", ["jobs", _]) => View,
+        ("POST", ["registry", "install"]) => Admin,
         ("GET", ["host", "metrics"]) => View,
         ("GET", ["inspect"]) => View,
         ("GET", ["plugins"]) => View,
@@ -1218,6 +1257,7 @@ fn required_scope(method: &str, seg: &[&str]) -> Scope {
         ("DELETE", ["servers", _, "backups", _]) => Control,
         ("PUT", ["servers", _, "file"]) => Control,
         ("POST", ["servers", _, "files"]) => Control,
+        ("PUT", ["servers", _, "tasks" | "backup-schedule" | "snippets"]) => Control,
         ("POST", ["servers", _, "snapshots"]) => Control,
         ("POST", ["servers", _, "snapshots", "restore"]) => Control,
         ("DELETE", ["servers", _, "snapshots"]) => Control,
@@ -1671,18 +1711,28 @@ fn download_file<S: Read + Write>(
     let Some(path) = resolve_instance_path(handle, id, &rel) else {
         return respond(stream, 400, "application/json", &err("invalid path"));
     };
-    let Ok(meta) = std::fs::metadata(&path) else {
+    send_file(stream, &path, None)
+}
+
+/// Streams one file with an attachment disposition. `filename` overrides the
+/// on-disk name (used for logs/audit exports).
+fn send_file<S: Write>(
+    stream: &mut S,
+    path: &Path,
+    filename: Option<&str>,
+) -> std::io::Result<()> {
+    let Ok(meta) = std::fs::metadata(path) else {
         return respond(stream, 404, "application/json", &err("file not found"));
     };
     if !meta.is_file() {
         return respond(stream, 400, "application/json", &err("not a file"));
     }
-    let Ok(mut file) = std::fs::File::open(&path) else {
+    let Ok(mut file) = std::fs::File::open(path) else {
         return respond(stream, 500, "application/json", &err("failed to open file"));
     };
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
+    let name = filename
+        .map(str::to_string)
+        .or_else(|| path.file_name().map(|n| n.to_string_lossy().to_string()))
         .unwrap_or_else(|| "download".to_string());
     let headers = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nContent-Disposition: attachment; filename=\"{}\"\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
@@ -1692,6 +1742,114 @@ fn download_file<S: Read + Write>(
     stream.write_all(headers.as_bytes())?;
     std::io::copy(&mut file, stream)?;
     stream.flush()
+}
+
+/// `GET /api/servers/:id/log/download` — the full instance log as a file.
+fn log_download<S: Read + Write>(
+    handle: &AppHandle,
+    stream: &mut S,
+    auth: &AuthContext,
+    id: &str,
+) -> std::io::Result<()> {
+    if !auth.allows_scope(Scope::View) || !auth.allows_server(id) {
+        return respond(stream, 403, "application/json", &err("not allowed"));
+    }
+    let Some(path) = instance_log_path(handle, id) else {
+        return respond(stream, 404, "application/json", &err("server not found"));
+    };
+    send_file(stream, &path, Some("latest.log"))
+}
+
+/// `GET /api/audit/download` — the audit log as a file (admins).
+fn audit_download<S: Read + Write>(
+    handle: &AppHandle,
+    stream: &mut S,
+    auth: &AuthContext,
+) -> std::io::Result<()> {
+    if !auth.allows_scope(Scope::Admin) {
+        return respond(stream, 403, "application/json", &err("admins only"));
+    }
+    let Ok(dir) = config::config_dir(handle) else {
+        return respond(stream, 500, "application/json", &err("no app data dir"));
+    };
+    send_file(stream, &dir.join("audit.log"), Some("kern-audit.log"))
+}
+
+/// `POST /api/plugins/upload-install?name=x.kern` — stream a `.kern` to a
+/// staging dir, validate it, and install (admins).
+fn install_uploaded_plugin<R: BufRead>(
+    reader: &mut R,
+    handle: &AppHandle,
+    content_length: Option<u64>,
+    name: &str,
+) -> Result<(u16, String), (u16, &'static str)> {
+    let Some(len) = content_length else {
+        return Err((411, "content-length required"));
+    };
+    if len > MAX_UPLOAD_BYTES {
+        return Err((413, "file too large"));
+    }
+
+    // Sanitize to a plain basename and force the .kern extension.
+    let basename = Path::new(name)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "plugin.kern".to_string());
+    let basename = basename.replace(['/', '\\'], "");
+    let safe_name = if basename.to_ascii_lowercase().ends_with(".kern") {
+        basename
+    } else {
+        format!("{basename}.kern")
+    };
+    if safe_name.len() < 6 || safe_name.starts_with('.') {
+        return Err((400, "invalid file name"));
+    }
+
+    let dir = config::config_dir(handle)
+        .map_err(|_| (500, "no app data dir"))?
+        .join("uploads");
+    let _ = std::fs::create_dir_all(&dir);
+    let staged = dir.join(&safe_name);
+
+    let mut file = std::fs::File::create(&staged).map_err(|_| (500, "failed to stage upload"))?;
+    let mut limited = reader.take(len);
+    let copied = std::io::copy(&mut limited, &mut file).map_err(|_| (500, "upload failed"))?;
+    drop(file);
+    if copied != len {
+        let _ = std::fs::remove_file(&staged);
+        return Err((400, "incomplete upload"));
+    }
+
+    let staged_path = staged.to_string_lossy().to_string();
+    let validated = commands_validate(&staged_path);
+    if let Err(message) = validated {
+        let _ = std::fs::remove_file(&staged);
+        return Ok((400, err(&message)));
+    }
+
+    match crate::commands::install_plugin_from_kern(handle.clone(), staged_path, false) {
+        Ok(manifest) => {
+            let _ = std::fs::remove_file(&staged);
+            Ok((
+                200,
+                serde_json::json!({
+                    "ok": true,
+                    "id": manifest.id,
+                    "displayName": manifest.display_name,
+                    "version": manifest.version,
+                })
+                .to_string(),
+            ))
+        }
+        Err(message) => {
+            let _ = std::fs::remove_file(&staged);
+            Ok((400, err(&message)))
+        }
+    }
+}
+
+fn commands_validate(path: &str) -> Result<crate::manifest::Manifest, String> {
+    crate::commands::validate_kern_file(path.to_string())
 }
 
 fn stream_upload<R: BufRead>(

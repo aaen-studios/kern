@@ -169,6 +169,8 @@ export interface PluginManifest {
   version?: string;
   author?: string;
   description?: string;
+  kernCompat?: string;
+  permissions?: string[];
   configSchema?: ConfigField[];
   [key: string]: unknown;
 }
@@ -191,4 +193,56 @@ export interface RegistryPlugin {
   upvotes?: number;
   installCount?: number;
   versions?: { version: string; kernCompat?: string; sha256?: string; sizeBytes?: number; changelog?: string }[];
+}
+
+export interface ServerDetail {
+  id: string;
+  name: string;
+  type: string;
+  path: string;
+  group?: string | null;
+  tags: string[];
+  status: string;
+  running: boolean;
+  adopted: boolean;
+  orphaned: boolean;
+  autoStart: boolean;
+  stopCommand?: string | null;
+  stopTimeoutSecs?: number;
+  userOverrides?: Record<string, string>;
+  pid?: number | null;
+  uptimeSecs?: number | null;
+  metrics?: { cpu: number; ram: number } | null;
+  lastCrash?: CrashInfo | null;
+}
+
+export interface FolderInspection {
+  path: string;
+  jars: string[];
+  startScripts: string[];
+  hasServerProperties: boolean;
+  eulaDeclined: boolean;
+  hasWorld: boolean;
+  suggestedRuntime?: string | null;
+  suggestedOverrides?: Record<string, string>;
+  suggestedName: string;
+}
+
+export interface Job {
+  id: string;
+  kind: string;
+  state: "running" | "done" | "error";
+  message: string;
+  at: number;
+}
+
+export interface RconStatus {
+  host: string;
+  port: number;
+  hasPassword: boolean;
+}
+
+export interface RconPlayers {
+  players: string[];
+  raw: string;
 }

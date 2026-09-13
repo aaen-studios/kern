@@ -50,7 +50,17 @@ export function Overview({ user }: { user: AuthUser }) {
 
   return (
     <div>
-      <h1 className="font-mono text-sm uppercase tracking-[0.2em] text-zinc-100">overview</h1>
+      <div className="flex items-center gap-2">
+        <h1 className="font-mono text-sm uppercase tracking-[0.2em] text-zinc-100">overview</h1>
+        {user.role === "admin" && (
+          <button
+            onClick={() => navigate("/new")}
+            className="ml-auto border border-signal-high/40 px-3 py-1 font-mono text-[11px] lowercase text-signal-high"
+          >
+            + new instance
+          </button>
+        )}
+      </div>
       <p className="mt-1 font-mono text-[11px] text-zinc-500">
         {running}/{servers.length} running
         {host
