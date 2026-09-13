@@ -37,4 +37,5 @@ think of it as a self-hosted alternative to cloud game-panel tools (pterodactyl,
 - **notifications** — in-app center, native os toasts when unfocused, discord/slack webhooks, and regex log alerts. see `notifications`.
 - **schedules** — interval, daily, or cron tasks (restart / start / stop / command / backup / health) with optional pre-restart console announcements.
 - **audit log** — local history of lifecycle actions, config changes, plugin installs, backups, and task runs.
+- **remote access** — a phone control panel on your lan (self-signed https + qr pairing), optionally exposed from anywhere through a cloudflare quick tunnel. see `web-remote`.
 - **cli & automation** — `kern-cli` and a loopback-only json api for scripts. see `cli`.
