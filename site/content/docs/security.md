@@ -26,7 +26,7 @@ kern runs servers on your machine, so the trust boundaries worth knowing are con
 
 ## the web remote
 
-see [web remote](/docs/web-remote). short version: https with a self-signed cert, token in the **os credential vault**, qr pairing, bound to the lan only while enabled. the optional **cloudflare tunnel** exposes it publicly at a random `*.trycloudflare.com` URL — still token-gated, but a public URL plus token is full control, so enable it deliberately and turn it off when you're done. anyone with the token and lan access can control lifecycle — disable it when unused.
+see [web remote](/docs/web-remote). short version: https with a self-signed cert (or a real one via the tunnel), **per-device tokens** paired with single-use invites, roles (`viewer` / `operator` / `admin`) with optional per-server scoping, and no listener on the lan at all if you bind `127.0.0.1`. the optional **cloudflare tunnel** (quick or named) exposes it publicly — still device-token gated, but a public URL plus a valid token is full control, so enable it deliberately, revoke devices you don't trust, and put **cloudflare access** in front for anything long-lived. every remote mutation is attributed in the audit log.
 
 ## secrets
 
