@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { getDocNav, getSearchSections } from "@/lib/docs";
 import { getRelease, formatVersion } from "@/lib/github";
 import { DocSearch } from "@/components/docs/DocSearch";
+import { AgentSkillMenu } from "@/components/docs/AgentSkillMenu";
 
 export const metadata: Metadata = {
   title: "docs",
@@ -59,7 +60,12 @@ export default async function DocsLayout({
         </aside>
 
         {/* prose */}
-        <div className="min-w-0">{children}</div>
+        <div className="min-w-0">
+          <div className="mb-4 flex justify-end">
+            <AgentSkillMenu />
+          </div>
+          {children}
+        </div>
       </div>
     </div>
   );
