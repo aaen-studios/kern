@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { revalidatePath } from "next/cache";
 import { createServerSupabase, getAuthenticatedUserId } from "@/lib/supabase-server";
+import { resolvePlugin } from "@/lib/plugin-lookup";
 
 type RouteParams = { params: Promise<{ id: string; version: string }> };
 
@@ -19,23 +20,10 @@ export async function DELETE(_request: NextRequest, { params }: RouteParams) {
     }
 
     // Verify ownership — resolve by slug or UUID
-    let { data: plugin } = await supabase
-      .from("plugins")
-      .select("id, author_id")
-      .eq("slug", id)
-      .single();
-
+    const { plugin, error: lookupError } = await resolvePlugin(supabase, id);
     if (!plugin) {
-      const { data: fallback } = await supabase
-        .from("plugins")
-        .select("id, author_id")
-        .eq("id", id)
-        .single();
-      plugin = fallback ?? null;
-    }
-
-    if (!plugin) {
-      return NextResponse.json({ error: "Plugin not found" }, { status: 404 });
+      console.error("version DELETE lookup failed", { id, lookupError, userId });
+      return NextResponse.json({ error: lookupError }, { status: 404 });
     }
     if (plugin.author_id !== userId) {
       return NextResponse.json({ error: "Not authorized" }, { status: 403 });
