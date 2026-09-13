@@ -416,19 +416,43 @@ pub fn apply_settings(app: &AppHandle) {
         Err(_) => "127.0.0.1".to_string(),
     };
 
-    start(app, &binary, managed, port, &mode, &token, &hostname, &origin);
+    start(
+        app,
+        TunnelLaunch {
+            binary: &binary,
+            managed,
+            port,
+            mode: &mode,
+            token: &token,
+            hostname: &hostname,
+            origin: &origin,
+        },
+    );
 }
 
-fn start(
-    app: &AppHandle,
-    binary: &Path,
+/// Everything one cloudflared launch needs (grouped to keep `start` tidy).
+struct TunnelLaunch<'a> {
+    binary: &'a Path,
     managed: bool,
     port: u16,
-    mode: &str,
-    token: &str,
-    hostname: &str,
-    origin: &str,
-) {
+    mode: &'a str,
+    /// Connector token for named tunnels; empty for quick tunnels.
+    token: &'a str,
+    hostname: &'a str,
+    /// Web-remote origin the connector dials (`127.0.0.1` for wildcard binds).
+    origin: &'a str,
+}
+
+fn start(app: &AppHandle, launch: TunnelLaunch<'_>) {
+    let TunnelLaunch {
+        binary,
+        managed,
+        port,
+        mode,
+        token,
+        hostname,
+        origin,
+    } = launch;
     let state: tauri::State<'_, TunnelState> = app.state();
     let generation = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
     set_error(app, None);

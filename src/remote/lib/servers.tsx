@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { api } from "./api";
+import { notifyFault } from "./notify";
 import type { ServerSummary } from "./types";
 
 interface ServersApi {
@@ -40,6 +41,12 @@ export function ServersProvider({
   const [servers, setServers] = useState<ServerSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const timer = useRef<number | null>(null);
+  // Mirror of the latest list for transition detection outside the updater
+  // (side effects there would run twice under StrictMode).
+  const serversRef = useRef<ServerSummary[]>([]);
+  useEffect(() => {
+    serversRef.current = servers;
+  }, [servers]);
 
   const refresh = useCallback(async () => {
     if (!enabled) return;
@@ -55,6 +62,18 @@ export function ServersProvider({
 
   const patchStatuses = useCallback(
     (list: { id: string; status?: string | null; running: boolean }[]) => {
+      // Fault notifications: only on a transition into a bad status.
+      for (const entry of list) {
+        const before = serversRef.current.find((server) => server.id === entry.id);
+        if (!before) continue;
+        const nextStatus = entry.status ?? before.status;
+        if (
+          nextStatus !== before.status &&
+          ["error", "stopped-forced", "crashed"].includes(nextStatus)
+        ) {
+          notifyFault(before.name, nextStatus);
+        }
+      }
       setServers((prev) => {
         let changed = false;
         const next = prev.map((server) => {

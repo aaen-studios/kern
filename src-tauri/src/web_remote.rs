@@ -2057,3 +2057,69 @@ pub(crate) fn act(handle: &AppHandle, id: &str, action: &str) -> (u16, &'static 
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scope_policy_covers_the_panel_surface() {
+        use Scope::*;
+        let scope = |method: &str, path: &[&str]| required_scope(method, path);
+
+        // Reads.
+        assert_eq!(scope("GET", &["servers"]), View);
+        assert_eq!(scope("GET", &["servers", "srv_1", "log"]), View);
+        assert_eq!(scope("GET", &["servers", "srv_1", "file"]), View);
+        assert_eq!(scope("GET", &["servers", "srv_1", "snapshots"]), View);
+        assert_eq!(scope("GET", &["servers", "srv_1", "backup-schedule"]), View);
+        assert_eq!(scope("GET", &["servers", "srv_1", "snippets"]), View);
+        assert_eq!(scope("GET", &["registry", "plugins"]), View);
+        assert_eq!(scope("GET", &["jobs", "job_1"]), View);
+        assert_eq!(scope("GET", &["audit"]), View);
+
+        // Control.
+        assert_eq!(scope("POST", &["servers", "srv_1", "stdin"]), Control);
+        assert_eq!(scope("POST", &["servers", "srv_1", "restart"]), Control);
+        assert_eq!(scope("PUT", &["servers", "srv_1", "file"]), Control);
+        assert_eq!(scope("PUT", &["servers", "srv_1", "tasks"]), Control);
+        assert_eq!(scope("DELETE", &["servers", "srv_1", "snapshots"]), Control);
+        // Player queries execute RCON, so they are not read-only.
+        assert_eq!(scope("GET", &["servers", "srv_1", "players"]), Control);
+
+        // Admin.
+        assert_eq!(scope("POST", &["servers"]), Admin);
+        assert_eq!(scope("PATCH", &["servers", "srv_1"]), Admin);
+        assert_eq!(scope("DELETE", &["servers", "srv_1"]), Admin);
+        assert_eq!(scope("POST", &["plugins", "install"]), Admin);
+        assert_eq!(scope("POST", &["registry", "install"]), Admin);
+        // Unknown routes fail closed.
+        assert_eq!(scope("GET", &["something-new"]), Admin);
+        assert_eq!(scope("POST", &["servers", "srv_1", "mystery"]), Admin);
+    }
+
+    #[test]
+    fn mime_types_cover_panel_assets() {
+        assert!(mime_for("/assets/index-abc.js").starts_with("application/javascript"));
+        assert!(mime_for("/assets/index-abc.css").starts_with("text/css"));
+        assert_eq!(mime_for("/"), "application/octet-stream");
+        assert_eq!(mime_for("/manifest.webmanifest"), "application/manifest+json");
+        assert_eq!(mime_for("/icon-32.png"), "image/png");
+        assert_eq!(mime_for("/sw.js"), "application/javascript; charset=utf-8");
+    }
+
+    #[test]
+    fn url_host_brackets_ipv6() {
+        let v4: std::net::IpAddr = "192.168.1.10".parse().unwrap();
+        let v6: std::net::IpAddr = "fd00::1".parse().unwrap();
+        assert_eq!(url_host(&v4), "192.168.1.10");
+        assert_eq!(url_host(&v6), "[fd00::1]");
+    }
+
+    #[test]
+    fn publish_conversion_lists_known_values() {
+        // Sanity: the status helpers build a stable URL shape.
+        let urls = display_urls("127.0.0.1", 7440);
+        assert_eq!(urls, vec!["https://localhost:7440".to_string()]);
+    }
+}

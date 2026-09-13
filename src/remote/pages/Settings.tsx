@@ -3,6 +3,7 @@ import { api } from "../lib/api";
 import { fmtAgo, fmtIn } from "../lib/format";
 import { navigate } from "../lib/router";
 import { can } from "../lib/roles";
+import { disableNotifications, enableNotifications, notificationsEnabled } from "../lib/notify";
 import { clearSession } from "../lib/session";
 import { useToast } from "../lib/toast";
 import type { AuthUser, Invite, People, RemoteStatus } from "../lib/types";
@@ -15,6 +16,7 @@ export function Settings({ user }: { user: AuthUser }) {
   const [inviteRole, setInviteRole] = useState("viewer");
   const [inviteServers, setInviteServers] = useState("");
   const [created, setCreated] = useState<Invite | null>(null);
+  const [notifyOn, setNotifyOn] = useState(notificationsEnabled());
 
   const refresh = useCallback(async () => {
     try {
@@ -134,6 +136,42 @@ export function Settings({ user }: { user: AuthUser }) {
         {status?.tunnel.error && (
           <p className="mt-2 font-mono text-[11px] text-warn-vector">{status.tunnel.error}</p>
         )}
+
+        <div className="mt-3 flex items-center gap-2 border-t border-grid-bounds pt-3">
+          <span className="font-mono text-[11px] text-zinc-500">crash notifications</span>
+          <span
+            className={`border px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.15em] ${
+              notifyOn ? "border-signal-high/40 text-signal-high" : "border-grid-bounds text-zinc-600"
+            }`}
+          >
+            {notifyOn ? "on" : "off"}
+          </span>
+          {!notifyOn ? (
+            <button
+              onClick={async () => {
+                const granted = await enableNotifications();
+                setNotifyOn(granted);
+                push(
+                  granted ? "notifications enabled" : "the browser denied notification permission",
+                  granted ? "success" : "warn",
+                );
+              }}
+              className="ml-auto border border-grid-bounds px-3 py-1 font-mono text-[11px] lowercase text-zinc-300"
+            >
+              enable
+            </button>
+          ) : (
+            <button
+              onClick={() => {
+                disableNotifications();
+                setNotifyOn(false);
+              }}
+              className="ml-auto border border-grid-bounds px-3 py-1 font-mono text-[11px] lowercase text-zinc-400"
+            >
+              disable
+            </button>
+          )}
+        </div>
       </section>
 
       {can(user, "admin") && (
