@@ -311,4 +311,7 @@ still open the console window it explicitly asks for.
 The first time the web remote binds to the LAN (`0.0.0.0`), Windows Firewall
 shows its standard "allow access" dialog. This is an OS prompt, not a terminal.
 Allow it for **Private networks** only; access is token-authenticated either
-way.
+way. Binding the remote to `127.0.0.1` (Settings → web remote → bind address)
+avoids the prompt entirely — the panel is then only reachable through the
+cloudflare tunnel or your own reverse proxy. Full docs: `docs/web-remote.md`
+(kern-web).
