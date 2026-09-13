@@ -341,4 +341,40 @@ mod tests {
         m.id = "../evil".to_string();
         assert!(validate_installable(&m).is_err());
     }
+
+    /// The repo's official sample plugins must always parse against this
+    /// schema and pass install validation. They are the reference
+    /// implementations users copy, so a schema change that breaks them should
+    /// fail here first.
+    #[test]
+    fn official_sample_manifests_parse_and_validate() {
+        let plugins_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../plugins");
+        let minecraft = load(&plugins_dir.join("minecraft_java/manifest.json"))
+            .expect("minecraft_java manifest should parse");
+        let discord = load(&plugins_dir.join("discord_bot/manifest.json"))
+            .expect("discord_bot manifest should parse");
+
+        for manifest in [&minecraft, &discord] {
+            validate_installable(manifest)
+                .unwrap_or_else(|e| panic!("'{}' should be installable: {e}", manifest.id));
+            assert_eq!(manifest.author, "ellipog");
+            assert_eq!(manifest.version, "1.3.0");
+            assert!(manifest.kern_compat.as_deref().is_some_and(version_satisfies));
+        }
+
+        assert!(minecraft
+            .tabs
+            .iter()
+            .any(|t| t.id == "mc-manage"), "minecraft should declare its Manage tab");
+
+        // Discord's install must be runtime-qualified: "node install" is not a
+        // command, so a generic install step would fail for the node runtime.
+        assert!(!discord.lifecycle.contains_key("install"));
+        for runtime in ["node", "bun", "deno", "rust"] {
+            assert!(
+                discord.lifecycle.contains_key(&format!("install.{runtime}")),
+                "discord is missing install.{runtime}"
+            );
+        }
+    }
 }

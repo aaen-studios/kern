@@ -21,6 +21,8 @@ jobs:
         run: bun run build
       - name: Silent-spawn guard
         run: node scripts/check-silent-spawns.mjs
+      - name: Plugin archive check
+        run: bun run plugins:check
       - name: Tests
         run: bun test
 

@@ -11,6 +11,8 @@
     "e2e:stop": "bun scripts/e2e-stop.mjs",
     "e2e:cli": "bun scripts/e2e-cli.mjs",
     "plugins:pack": "node scripts/pack-plugins.mjs",
+    "plugins:build": "npm --prefix plugins/minecraft_java run build && npm --prefix plugins/discord_bot run build",
+    "plugins:check": "bun scripts/plugins-check.mjs",
     "installer:build": "node scripts/build-installer.mjs",
     "preview": "vite preview",
     "tauri": "tauri",
