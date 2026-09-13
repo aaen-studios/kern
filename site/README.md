@@ -67,6 +67,37 @@ agents that prefer the web can use [kern.aaenz.no/llms.txt](https://kern.aaenz.n
 
 `skills/kern/references/` is generated from `content/docs/` — after editing docs run `npm run skill:build` (and `npm run skill:check` before committing).
 
+## publishing official plugin updates
+
+the first-party plugins (`minecraft_java`, `discord_bot`) live in the
+[`kern`](https://github.com/aaen-studios/kern) repo under `plugins/`. to ship a
+new version:
+
+1. in `kern`: bump the manifest, rebuild the UI, repack, and build the upload
+   bundle — `bun run plugins:check` must pass:
+
+   ```bash
+   bun run plugins:build && bun run plugins:pack && bun run plugins:check
+   bun run plugins:bundle        # fresh release-assets/plugins bundle + meta.json
+   ```
+
+2. in `kern-web`: update `content/plugins/seed.json` (version entry, changelog,
+   readme) so seed mode and the landing cards match.
+3. publish to the live registry — uploads the `.kern` files to the
+   `plugin-kern` bucket and replaces the `plugin_versions` rows. `--dry-run`
+   verifies the bundle locally first:
+
+   ```bash
+   npm run publish:plugins -- ../kern/release-assets/plugins --dry-run
+   npm run publish:plugins -- ../kern/release-assets/plugins --update-meta
+   ```
+
+   `--update-meta` also refreshes the `plugins` row (description, readme,
+   config schema, tags) from the seed. needs `SUPABASE_SERVICE_ROLE_KEY` in
+   `.env.local`.
+4. verify: `/api/download?id=<slug>&v=<version>` should 302, and the plugin
+   page should show the new version.
+
 ## contributing
 
 this is an open source project. pull requests, issues, and discussions are welcome on [github](https://github.com/aaen-studios/kern).

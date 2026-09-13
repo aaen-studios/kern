@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "skill:build": "node scripts/build-skill.mjs",
-    "skill:check": "node scripts/build-skill.mjs --check"
+    "skill:check": "node scripts/build-skill.mjs --check",
+    "publish:plugins": "node scripts/publish-plugins.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.0",
