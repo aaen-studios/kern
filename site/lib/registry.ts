@@ -463,8 +463,15 @@ export function latestVersion(p: Plugin): PluginVersion {
   return p.versions.reduce((a, b) => (b.created_at > a.created_at ? b : a));
 }
 
-export function formatRelativeTime(ts: number): string {
-  const diff = Date.now() - ts;
+export function formatRelativeTime(ts: number | string | Date): string {
+  const time =
+    ts instanceof Date
+      ? ts.getTime()
+      : typeof ts === "string"
+        ? Date.parse(ts)
+        : ts;
+  const diff = Date.now() - time;
+  if (!Number.isFinite(diff)) return "unknown";
   const day = 86400000;
   if (diff < day) return "today";
   if (diff < day * 30) return `${Math.floor(diff / day)}d ago`;

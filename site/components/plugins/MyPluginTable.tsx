@@ -35,10 +35,14 @@ export function MyPluginTable() {
           const res = await fetch(`/api/plugins?author=${profile.github_user}`);
           if (res.ok) {
             const data = await res.json();
-            // Normalize: use slug as the public ID (consistent with mapLivePlugin)
+            // Normalize: the API returns raw DB rows (ISO timestamps, slug as
+            // the public ID, `upvotes` instead of `rating_sum`)
             const normalized = data.map((p: Record<string, unknown>) => ({
               ...p,
               id: p.slug as string,
+              updated_at: new Date(p.updated_at as string).getTime(),
+              created_at: new Date(p.created_at as string).getTime(),
+              rating_sum: (p.upvotes as number) ?? 0,
             })) as Plugin[];
             setPlugins(normalized);
           }
