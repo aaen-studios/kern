@@ -86,7 +86,15 @@ export function Footer() {
             built with tauri · react · rust · tailwind
           </p>
           <p className="font-mono text-[11px] lowercase text-signal-low">
-            © {new Date().getFullYear()} aaen studios
+            © {new Date().getFullYear()}{" "}
+            <a
+              href="https://aaenz.no"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="transition-colors hover:text-signal-high"
+            >
+              aaen studios
+            </a>
           </p>
         </div>
       </div>

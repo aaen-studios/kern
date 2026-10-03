@@ -66,6 +66,7 @@ const jsonLd = {
   offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
   url: "https://kern.aaenz.no",
   downloadUrl: "https://github.com/aaen-studios/kern/releases/latest",
+  author: { "@type": "Organization", name: "Aaen Studios", url: "https://aaenz.no" },
 };
 
 export default function RootLayout({
