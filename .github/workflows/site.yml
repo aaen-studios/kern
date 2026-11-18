@@ -43,8 +43,12 @@ jobs:
       - name: build
         run: bun run build
         env:
-          # build degrades gracefully without secrets (seed registry,
-          # release fetch returns null) — keep CI secretless.
+          # Keep CI secretless: the registry falls back to the seed and the
+          # release fetch returns null. The Supabase client still needs a URL
+          # and key to exist, or /account/plugins throws before it reads
+          # cookies and Next tries to prerender it. Placeholders do that.
+          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder-anon-key
           NEXT_TELEMETRY_DISABLED: "1"
 
   radar:
