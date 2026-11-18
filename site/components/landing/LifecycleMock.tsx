@@ -1,0 +1,87 @@
+import { SectionHeading, Reveal } from "@/components/ui/Reveal";
+import { StatusDots } from "@/components/ui/StatusDots";
+
+/*
+  §10.6 — Lifecycle. Start / Stop / Restart / Install, driven by each plugin's
+  lifecycle manifest block. Graceful shutdown window first (default 30s), then a
+  guaranteed tree-kill — no orphans, no silent drops.
+*/
+
+function LifeButton({
+  label,
+  tone,
+}: {
+  label: string;
+  tone: "signal" | "warn" | "fault" | "muted";
+}) {
+  const cls = {
+    signal: "text-signal-high ring-signal-high/40 hover:bg-signal-high/10",
+    warn: "text-warn-vector ring-warn-vector/40 hover:bg-warn-vector/10",
+    fault: "text-fault-vector ring-fault-vector/40 hover:bg-fault-vector/10",
+    muted: "text-signal-low ring-grid-bounds hover:text-zinc-300",
+  }[tone];
+  return (
+    <button
+      type="button"
+      disabled
+      className={`inline-flex items-center gap-2 bg-bg-surface px-4 py-2 font-mono text-xs lowercase ring-1 transition-colors ${cls}`}
+    >
+      {label}
+    </button>
+  );
+}
+
+export function LifecycleMock() {
+  return (
+    <section className="bg-bg-surface/30 mx-auto w-full px-4 py-24 sm:px-6 flex justify-center items-center">
+      <div className="max-w-[1080px]">
+        <Reveal>
+          <SectionHeading kicker="lifecycle" title="start. stop. restart. gracefully.">
+            driven by each plugin&rsquo;s lifecycle manifest. commands support{" "}
+            <code className="text-signal-high">{"{{userOverrides.*}}"}</code>{" "}
+            templating resolved at launch by rust.
+          </SectionHeading>
+        </Reveal>
+
+        <Reveal delay={0.1}>
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1.2fr_1fr]">
+            {/* controls */}
+            <div
+              className="bg-bg-core p-6"
+              style={{ boxShadow: "inset 0 0 0 1px rgba(22,25,32,0.9)" }}
+            >
+              <div className="mb-5 flex items-center justify-between border-b border-grid-bounds/50 pb-3">
+                <span className="font-mono text-[11px] lowercase text-signal-low">
+                  discord_bot · lifecycle
+                </span>
+                <StatusDots status="breathe" label="starting" count={4} />
+              </div>
+              <div className="flex flex-wrap gap-3">
+                <LifeButton label="start" tone="signal" />
+                <LifeButton label="stop" tone="warn" />
+                <LifeButton label="restart" tone="muted" />
+                <LifeButton label="install" tone="fault" />
+              </div>
+            </div>
+
+            {/* graceful shutdown callout */}
+            <div
+              className="flex flex-col justify-center bg-warn-vector/5 p-6 ring-1 ring-warn-vector/30"
+            >
+              <p className="font-mono text-[11px] lowercase text-warn-vector">
+                {"// "}graceful shutdown
+              </p>
+              <p className="mt-2 font-mono text-sm lowercase text-zinc-200">
+                graceful window, then guaranteed hard-kill.
+              </p>
+              <p className="mt-2 font-mono text-xs text-signal-low">
+                the whole process tree goes down — no orphans. tune the window
+                per instance; 30 seconds is the default.
+              </p>
+            </div>
+          </div>
+        </Reveal>
+      </div>
+    </section>
+  );
+}

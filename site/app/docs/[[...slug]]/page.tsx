@@ -1,0 +1,149 @@
+import type { Metadata } from "next";
+import Link from "next/link";
+import { notFound } from "next/navigation";
+import { getAllDocs, getDocBySlug } from "@/lib/docs";
+import { Markdown } from "@/lib/markdown";
+import { MatrixDivider } from "@/components/ui/MatrixBorder";
+import { DocToc } from "@/components/docs/DocToc";
+import { CopyPageButton } from "@/components/docs/CopyPageButton";
+
+/*
+  Docs catch-all. /docs → overview; /docs/<slug> → that doc.
+  Statically prerendered for every authored doc.
+*/
+
+export function generateStaticParams() {
+  // [overview] represents the index (/docs). the rest are individual docs.
+  return [
+    { slug: ["overview"] },
+    ...getAllDocs()
+      .filter((d) => d.slug !== "overview")
+      .map((d) => ({ slug: [d.slug] })),
+  ];
+}
+
+export async function generateMetadata(
+  props: PageProps<"/docs/[[...slug]]">,
+): Promise<Metadata> {
+  const { slug } = await props.params;
+  const s = slug?.[0] ?? "overview";
+  const doc = getDocBySlug(s);
+  if (!doc) return { title: "not found" };
+  return {
+    title: doc.title,
+    description: doc.description,
+    openGraph: {
+      title: doc.title,
+      description: doc.description,
+      images: [{ url: `/docs/og?slug=${doc.slug}`, width: 1200, height: 630 }],
+    },
+  };
+}
+
+export default async function DocPage(props: PageProps<"/docs/[[...slug]]">) {
+  const { slug } = await props.params;
+  const s = slug?.[0] ?? "overview";
+  const doc = getDocBySlug(s);
+  if (!doc) notFound();
+
+  const docs = getAllDocs();
+  const idx = docs.findIndex((d) => d.slug === doc.slug);
+  const prev = idx > 0 ? docs[idx - 1] : null;
+  const next = idx >= 0 && idx < docs.length - 1 ? docs[idx + 1] : null;
+
+  const editUrl = `https://github.com/ellipog/kern-web/edit/main/content/docs/${doc.slug}.md`;
+
+  return (
+    <div className="xl:flex xl:gap-10">
+      <article className="min-w-0 max-w-[820px] flex-1">
+        <header className="mb-8">
+          <p className="font-mono text-xs lowercase text-signal-low">
+            {"// "}{doc.group}
+          </p>
+          <h1 className="mt-2 font-mono text-3xl lowercase text-zinc-100">
+            {doc.title}
+          </h1>
+          <p className="mt-2 font-mono text-xs text-signal-low">{doc.description}</p>
+        </header>
+
+        <MatrixDivider className="mb-8 opacity-60" />
+
+        <Markdown content={doc.body} />
+
+        <MatrixDivider className="my-8 opacity-50" />
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          {prev ? (
+            <Link
+              href={`/docs/${prev.slug}`}
+              transitionTypes={["nav-back"]}
+              className="group panel-flat p-4 transition-colors hover:bg-bg-surface"
+            >
+              <span className="font-mono text-[10px] lowercase text-signal-low">
+                ← prev
+              </span>
+              <span className="mt-1 block font-mono text-xs lowercase text-zinc-200 transition-colors group-hover:text-signal-high">
+                {prev.title}
+              </span>
+              <span className="mt-1 block font-mono text-[10px] leading-relaxed text-signal-low">
+                {prev.description}
+              </span>
+            </Link>
+          ) : (
+            <span aria-hidden="true" />
+          )}
+          {next && (
+            <Link
+              href={`/docs/${next.slug}`}
+              transitionTypes={["nav-forward"]}
+              className="group panel-flat p-4 text-right transition-colors hover:bg-bg-surface"
+            >
+              <span className="font-mono text-[10px] lowercase text-signal-low">
+                next →
+              </span>
+              <span className="mt-1 block font-mono text-xs lowercase text-zinc-200 transition-colors group-hover:text-signal-high">
+                {next.title}
+              </span>
+              <span className="mt-1 block font-mono text-[10px] leading-relaxed text-signal-low">
+                {next.description}
+              </span>
+            </Link>
+          )}
+        </div>
+
+        <div className="mt-6 flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <CopyPageButton slug={doc.slug} />
+            <a
+              href={`/raw/docs/${doc.slug}`}
+              className="font-mono text-[11px] lowercase text-signal-low transition-colors hover:text-signal-high"
+            >
+              raw markdown ↗
+            </a>
+          </div>
+          <div className="flex items-center gap-4">
+            {doc.updated && (
+              <span className="font-mono text-[11px] lowercase text-signal-low">
+                updated {doc.updated}
+              </span>
+            )}
+            <a
+              href={editUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-mono text-[11px] lowercase text-signal-low transition-colors hover:text-signal-high"
+            >
+              edit on github ↗
+            </a>
+          </div>
+        </div>
+      </article>
+
+      <aside className="hidden w-[180px] shrink-0 xl:block">
+        <div className="sticky top-24">
+          <DocToc headings={doc.headings} />
+        </div>
+      </aside>
+    </div>
+  );
+}
