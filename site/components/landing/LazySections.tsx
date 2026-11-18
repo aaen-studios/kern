@@ -71,10 +71,6 @@ const AutoUpdateSection = dynamic(
     ),
   { ssr: false },
 );
-const RoadmapStrip = dynamic(
-  () => import("@/components/landing/RoadmapStrip").then((m) => m.RoadmapStrip),
-  { ssr: false },
-);
 
 function SectionFallback({ height = "h-96" }: { height?: string }) {
   return <div className={`w-full ${height}`} aria-hidden="true" />;
@@ -127,10 +123,6 @@ export function LazySections({
       <ScanDivider />
       <Suspense fallback={<SectionFallback height="h-[300px]" />}>
         <AutoUpdateSection />
-      </Suspense>
-      <ScanDivider />
-      <Suspense fallback={<SectionFallback height="h-[400px]" />}>
-        <RoadmapStrip />
       </Suspense>
 
       <section className="mx-auto max-w-[1080px] px-4 py-12 sm:px-6">

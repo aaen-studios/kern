@@ -23,7 +23,7 @@ updated: 2026-09-12
 
 **can i script it?** yes — [`kern-cli`](/docs/cli) for shells, and the [automation api](/docs/automation-api) for anything else, both on loopback with a bearer token.
 
-**is there a daemon / headless mode?** not yet. the app is the daemon; it runs in the tray. a headless build is a roadmap item.
+**is there a daemon / headless mode?** not yet. the app is the daemon; it runs in the tray.
 
 **how is this different from pterodactyl / amp?** those are web panels that manage servers on remote boxes with their own agents. kern is a native desktop app: your machine, your files, no docker, no browser, plus a plugin system for what "a server" means.
 
@@ -31,7 +31,7 @@ updated: 2026-09-12
 
 **intel macs?** apple silicon only today. the dmg says so.
 
-**linux packages?** appimage for now; `.deb` is on the roadmap.
+**linux packages?** appimage for now.
 
 **can two people share one kern?** it's a desktop app for one machine/user. multi-machine sync is export/import into a git repo, not real-time collaboration.
 
