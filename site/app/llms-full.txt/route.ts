@@ -16,7 +16,7 @@ export function GET() {
     "# kern — full documentation",
     "",
     "> every kern doc concatenated for one-shot agent ingestion.",
-    `> index: ${base}/llms.txt · skill: npx skills add ellipog/kern-web`,
+    `> index: ${base}/llms.txt · skill: npx skills add aaen-studios/kern`,
     "",
   ];
 

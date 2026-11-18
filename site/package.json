@@ -1,5 +1,5 @@
 {
-  "name": "kern-web",
+  "name": "kern-site",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -16,7 +16,6 @@
   "dependencies": {
     "@supabase/ssr": "^0.12.0",
     "@supabase/supabase-js": "^2.109.0",
-    "@vercel/analytics": "^2.0.1",
     "adm-zip": "^0.5.18",
     "fuse.js": "^7.4.2",
     "motion": "^12.42.2",

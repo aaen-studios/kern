@@ -10,14 +10,14 @@ description: install kern's docs as an agent skill so coding agents write plugin
 
 these docs are packaged as an **agent skill** — a folder of markdown an AI coding agent loads when the task touches kern. instead of scraping the site, your agent gets the manifest reference, lifecycle rules, kern-cli surface, and automation api as local files.
 
-the skill lives in [skills/kern](https://github.com/ellipog/kern-web/tree/main/skills/kern) and its `references/` directory is generated from these same docs, so the two can't drift.
+the skill lives in [skills/kern](https://github.com/aaen-studios/kern/tree/main/skills/kern) and its `references/` directory is generated from these same docs, so the two can't drift.
 
 ## install
 
 with the skills cli (claude code, opencode, cursor, and ~70 more agents):
 
 ```bash
-npx skills add ellipog/kern-web
+npx skills add aaen-studios/kern
 ```
 
 or as an npm package (pinned, offline):
@@ -30,8 +30,8 @@ npm i -D @aaen-studios/kern
 or copy it into whichever directory your agent scans:
 
 ```bash
-git clone --depth 1 https://github.com/ellipog/kern-web
-cp -r kern-web/skills/kern .claude/skills/kern   # or .agents/skills/kern, .cursor/skills/kern, …
+git clone --depth 1 https://github.com/aaen-studios/kern
+cp -r kern/skills/kern .claude/skills/kern   # or .agents/skills/kern, .cursor/skills/kern, …
 ```
 
 ## paste this into your agent
@@ -39,7 +39,7 @@ cp -r kern-web/skills/kern .claude/skills/kern   # or .agents/skills/kern, .curs
 don't want to install anything yourself? paste a one-liner and let the agent do it:
 
 ```text
-install the kern agent skill by running: npx skills add ellipog/kern-web — then use that skill to help me build a .kern plugin.
+install the kern agent skill by running: npx skills add aaen-studios/kern — then use that skill to help me build a .kern plugin.
 ```
 
 ## no install at all

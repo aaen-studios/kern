@@ -8,7 +8,6 @@ import { SignalStrip } from "@/components/layout/SignalStrip";
 import { BootSequence } from "@/components/layout/BootSequence";
 import { AuthProvider } from "@/components/auth/AuthProvider";
 import { SoundProvider } from "@/components/sound/SoundProvider";
-import { Analytics } from "@vercel/analytics/next"
 
 const jetbrainsMono = JetBrains_Mono({
   subsets: ["latin"],
@@ -105,7 +104,6 @@ export default function RootLayout({
           <Footer />
           <BackToTop />
         </SoundProvider>
-        <Analytics />
       </body>
     </html>
   );

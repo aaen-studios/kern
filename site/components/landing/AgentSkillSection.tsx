@@ -13,13 +13,13 @@ import { CodeCopy } from "@/components/docs/CodeCopy";
 */
 
 const AGENT_PROMPT =
-  "install the kern agent skill by running: npx skills add ellipog/kern-web — then use that skill to help me build a .kern plugin.";
+  "install the kern agent skill by running: npx skills add aaen-studios/kern — then use that skill to help me build a .kern plugin.";
 
 const MANUAL = [
   {
     label: "skills cli",
     note: "claude code, opencode, cursor +70 more",
-    command: "npx skills add ellipog/kern-web",
+    command: "npx skills add aaen-studios/kern",
   },
   {
     label: "npm",
@@ -97,7 +97,7 @@ export function AgentSkillSection() {
               </Link>{" "}
               · source:{" "}
               <Link
-                href="https://github.com/ellipog/kern-web/tree/main/skills/kern"
+                href="https://github.com/aaen-studios/kern/tree/main/skills/kern"
                 className="text-signal-high transition-colors hover:underline"
               >
                 skills/kern

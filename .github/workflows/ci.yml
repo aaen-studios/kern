@@ -3,7 +3,10 @@ name: CI
 on:
   push:
     branches: [main, master]
+    # The website and agent skill have their own workflow (site.yml).
+    paths-ignore: ["site/**", "skills/**", ".github/workflows/site.yml"]
   pull_request:
+    paths-ignore: ["site/**", "skills/**", ".github/workflows/site.yml"]
   workflow_dispatch:
 
 jobs:

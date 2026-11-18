@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 /*
-  Generates skills/kern/references/*.md from content/docs/*.md so the agent
+  Generates ../skills/kern/references (repo root)/*.md from content/docs/*.md so the agent
   skill (@aaen-studios/kern) never drifts from the published docs.
 
   - strips frontmatter (the body already opens with a # title)
@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DOCS_DIR = path.join(root, "content", "docs");
-const OUT_DIR = path.join(root, "skills", "kern", "references");
+const OUT_DIR = path.join(root, "..", "skills", "kern", "references");
 const CHECK = process.argv.includes("--check");
 
 function stripFrontmatter(raw) {
@@ -46,7 +46,7 @@ function build() {
     });
 
     const header =
-      `<!-- generated from content/docs/${slug}.md - edit the source in kern-web, then run: npm run skill:build -->\n\n`;
+      `<!-- generated from site/content/docs/${slug}.md - edit that source, then run: bun run skill:build -->\n\n`;
     out.set(`${slug}.md`, header + body.trimEnd() + "\n");
   }
 
@@ -97,7 +97,7 @@ function main() {
       : null;
     if (current !== content) fs.writeFileSync(file, content);
   }
-  console.log(`wrote ${expected.size} references to skills/kern/references`);
+  console.log(`wrote ${expected.size} references to ../skills/kern/references`);
 }
 
 main();

@@ -11,10 +11,10 @@ import { CodeCopy } from "@/components/docs/CodeCopy";
 */
 
 const AGENT_PROMPT =
-  "install the kern agent skill by running: npx skills add ellipog/kern-web — then use that skill to help me build a .kern plugin.";
+  "install the kern agent skill by running: npx skills add aaen-studios/kern — then use that skill to help me build a .kern plugin.";
 
 const COMMANDS = [
-  { label: "skills cli", command: "npx skills add ellipog/kern-web" },
+  { label: "skills cli", command: "npx skills add aaen-studios/kern" },
   { label: "npm", command: "npm i -D @aaen-studios/kern" },
   {
     label: "no install",

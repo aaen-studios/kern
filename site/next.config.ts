@@ -19,12 +19,15 @@ const nextConfig: NextConfig = {
       },
     },
   },
-  // Baseline hardening; HSTS is added by the platform (Vercel).
+  // Baseline hardening. The site is only reachable over HTTPS (Cloudflare in
+  // front of the VPS), so it sends HSTS itself; browsers ignore it on plain
+  // http://localhost.
   async headers() {
     return [
       {
         source: "/:path*",
         headers: [
+          { key: "Strict-Transport-Security", value: "max-age=31536000" },
           { key: "X-Content-Type-Options", value: "nosniff" },
           {
             key: "Referrer-Policy",

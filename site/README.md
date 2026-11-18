@@ -1,6 +1,6 @@
-# kern-web
+# kern site
 
-**kern.aaenz.no** — the public website and plugin registry for [kern](https://github.com/aaen-studios/kern), an open source cross-platform desktop server manager built with Tauri.
+**kern.aaenz.no** — the public website and plugin registry for [kern](https://github.com/aaen-studios/kern), an open source cross-platform desktop server manager built with Tauri. it lives in `site/` of the kern repo (it was the separate `kern-web` repo until 2026-11-18, history kept).
 
 ## overview
 
@@ -27,11 +27,16 @@ this is a [next.js](https://nextjs.org) project (app router) serving as the mark
 ## getting started
 
 ```bash
-npm install
-npm run dev
+cd site
+bun install
+bun run dev
 ```
 
 open [localhost:3000](http://localhost:3000).
+
+## deploys
+
+the site runs on the aaen VPS next to the other sites (Cloudflare Tunnel → Caddy → `next start`), set up in `ellipog/vps-hosting` (`sites/conf/kern.conf`). a push to `main` that touches `site/` builds and switches to the new release with no downtime; GitHub shows it as the `vps/kern` commit status. production secrets live on the VPS, not in this repo.
 
 ## environment
 
@@ -55,7 +60,6 @@ content/          — markdown docs and plugin seed data
 lib/              — utilities (github, supabase, auth, markdown rendering)
 public/           — static assets
 scripts/          — build tooling (skill generation)
-skills/           — the @aaen-studios/kern agent skill package
 supabase/         — database migrations
 ```
 
@@ -64,21 +68,21 @@ supabase/         — database migrations
 the docs ship as an [agent skill](https://skills.sh) so coding agents can build kern plugins and script `kern-cli` without scraping the site:
 
 ```bash
-npx skills add ellipog/kern-web          # install the skill (claude code, opencode, cursor, …)
+npx skills add aaen-studios/kern          # install the skill (claude code, opencode, cursor, …)
 npm i -D @aaen-studios/kern               # or the npm package (pinned / offline)
 ```
 
 agents that prefer the web can use [kern.aaenz.no/llms.txt](https://kern.aaenz.no/llms.txt) and the raw markdown at `/raw/docs/<slug>`.
 
-`skills/kern/references/` is generated from `content/docs/` — after editing docs run `npm run skill:build` (and `npm run skill:check` before committing).
+the skill lives at the repo root in `skills/kern` (so `npx skills add aaen-studios/kern` finds it). `skills/kern/references/` is generated from `site/content/docs/` — after editing docs run `bun run skill:build` (and `bun run skill:check` before committing).
 
 ## publishing official plugin updates
 
-the first-party plugins (`minecraft_java`, `discord_bot`) live in the
-[`kern`](https://github.com/aaen-studios/kern) repo under `plugins/`. to ship a
+the first-party plugins (`minecraft_java`, `discord_bot`) live in this repo
+under `plugins/`. to ship a
 new version:
 
-1. in `kern`: bump the manifest, rebuild the UI, repack, and build the upload
+1. at the repo root: bump the manifest, rebuild the UI, repack, and build the upload
    bundle — `bun run plugins:check` must pass:
 
    ```bash
@@ -86,15 +90,15 @@ new version:
    bun run plugins:bundle        # fresh release-assets/plugins bundle + meta.json
    ```
 
-2. in `kern-web`: update `content/plugins/seed.json` (version entry, changelog,
+2. in `site/`: update `content/plugins/seed.json` (version entry, changelog,
    readme) so seed mode and the landing cards match.
 3. publish to the live registry — uploads the `.kern` files to the
    `plugin-kern` bucket and replaces the `plugin_versions` rows. `--dry-run`
    verifies the bundle locally first:
 
    ```bash
-   npm run publish:plugins -- ../kern/release-assets/plugins --dry-run
-   npm run publish:plugins -- ../kern/release-assets/plugins --update-meta
+   bun run publish:plugins -- ../release-assets/plugins --dry-run
+   bun run publish:plugins -- ../release-assets/plugins --update-meta
    ```
 
    `--update-meta` also refreshes the `plugins` row (description, readme,

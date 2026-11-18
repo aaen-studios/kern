@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Emits registry metadata for the packed official plugins, ready to paste into
- * kern-web's `content/plugins/seed.json` (and Supabase when publishing).
+ * `site/content/plugins/seed.json` (and Supabase when publishing).
  *
  *   node scripts/plugin-registry-meta.mjs            # JSON to stdout
  *   node scripts/plugin-registry-meta.mjs > meta.json
