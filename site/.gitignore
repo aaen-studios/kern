@@ -46,3 +46,4 @@ NUL.*
 *.tsbuildinfo
 next-env.d.ts
 .zcode/*
+!.env.example
